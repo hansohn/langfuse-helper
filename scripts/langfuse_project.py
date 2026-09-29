@@ -301,7 +301,7 @@ def main():
     print("[INFO] Configure the plugin with this pair (stored outside any repo --")
     print("[INFO] the secret goes to the OS keychain, not to a file):")
     print("[INFO]")
-    print(f"[INFO]   claude plugin install langfuse-observability@langfuse-observability \\")
+    print("[INFO]   claude plugin install langfuse-observability@langfuse-observability \\")
     print(f"[INFO]     --config LANGFUSE_PUBLIC_KEY={key['publicKey']} \\")
     print(f"[INFO]     --config LANGFUSE_SECRET_KEY={key['secretKey']} \\")
     print(f"[INFO]     --config LANGFUSE_BASE_URL={base}")
