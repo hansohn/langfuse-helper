@@ -37,19 +37,35 @@ jobs:
           make help > /dev/null
           make test/assert
 
-      - name: trace/tag is idempotent and preserves siblings
+      - name: trace/tag and trace/untag, for every harness
+        env:
+          # Harness config is resolved from $HOME, so point it somewhere scratch.
+          HOME: ${{ runner.temp }}/home
         run: |
           repo="$RUNNER_TEMP/some-repo"
           settings="$repo/.claude/settings.json"
-          mkdir -p "$repo/.claude"
+          mkdir -p "$HOME" "$repo/.claude"
           echo '{"model": "x", "env": {"CC_LANGFUSE_TRACE_TAGS": "team:sre"}}' > "$settings"
 
-          make trace/tag "$repo"
-          make trace/tag "$repo" | grep -q 'no change'
-          jq -e '.model == "x" and .env.CC_LANGFUSE_TRACE_TAGS == "team:sre,repo:some-repo"' "$settings"
+          make trace/tag "$repo" TRACE_HARNESSES="claude codex"
+          make trace/tag "$repo" TRACE_HARNESSES="claude codex" | grep -c 'no change' | grep -qx 2
+          jq -e '.model == "x" and .env.CC_LANGFUSE_TRACE_TAGS == "team:sre,repo:some-repo,harness:claude"' "$settings"
+          jq -e '.tags == ["repo:some-repo", "harness:codex"]' "$repo/.codex/langfuse.json"
+          grep -qx 'hooks = true' "$repo/.codex/config.toml"
 
-          make trace/untag "$repo"
+          make trace/untag "$repo" TRACE_HARNESSES="claude codex"
           jq -e '.env.CC_LANGFUSE_TRACE_TAGS == "team:sre"' "$settings"
+          [ ! -e "$repo/.codex" ]
+
+      - name: A foreign Codex config.toml is refused, not rewritten
+        run: |
+          repo="$RUNNER_TEMP/foreign-repo"
+          mkdir -p "$repo/.codex"
+          printf '[features]\nhooks = false\n' > "$repo/.codex/config.toml"
+          cp "$repo/.codex/config.toml" "$RUNNER_TEMP/before.toml"
+          ! make trace/tag "$repo" TRACE_HARNESSES=codex
+          cmp "$repo/.codex/config.toml" "$RUNNER_TEMP/before.toml"
+          [ ! -e "$repo/.codex/langfuse.json" ]
 
   # Brings up the real stack and round-trips a backup through 'make clean', which
   # regenerates every secret. Restored API keys only authenticate if restore put
@@ -61,6 +77,9 @@ jobs:
     env:
       # The runner has no git identity for the headless account to default to.
       HEADLESS_EMAIL: ci@example.com
+      # Mint a key pair per harness. Neither CLI is on the runner, so
+      # trace/install only warns; the keys are what this job checks.
+      TRACE_HARNESSES: claude codex
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -70,12 +89,11 @@ jobs:
 
       - name: dev/up with tracing
         # trace/project drives Langfuse's internal tRPC routes, so this is also the
-        # early warning for upstream changing them. trace/install only warns here:
-        # the claude CLI is not on the runner.
+        # early warning for upstream changing them.
         run: TRACE=true make dev/up
 
       - name: trace/project is idempotent
-        run: make trace/project | grep -q 'already authenticate'
+        run: make trace/project | grep -c 'already authenticate' | grep -qx 2
 
       - name: Back up
         run: |
@@ -95,11 +113,14 @@ jobs:
           make langfuse/wait
           read_var() { grep -E "^$1=" "$BACKUP_DEST/env" | cut -d= -f2-; }
 
-          # Keys from the backup authenticate against the rebuilt stack.
-          curl --silent --show-error --fail \
-            --user "$(read_var LANGFUSE_TRACE_PUBLIC_KEY):$(read_var LANGFUSE_TRACE_SECRET_KEY)" \
-            http://localhost:3000/api/public/projects \
-            | jq -e '.data[0].name == "Claude Code Skills"'
+          # Every harness's keys from the backup authenticate against the rebuilt
+          # stack, and all of them point at the one tracing project.
+          for harness in CLAUDE CODEX; do
+            curl --silent --show-error --fail \
+              --user "$(read_var LANGFUSE_TRACE_${harness}_PUBLIC_KEY):$(read_var LANGFUSE_TRACE_${harness}_SECRET_KEY)" \
+              http://localhost:3000/api/public/projects \
+              | jq -e '.data[0].id == "claude-code-skills" and .data[0].name == "Coding Agents"'
+          done
 
           # Materialized views detached for the load were reattached.
           ch_password="$(grep -E '^CLICKHOUSE_PASSWORD=' .env | cut -d= -f2-)"
