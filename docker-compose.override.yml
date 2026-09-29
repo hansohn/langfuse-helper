@@ -1,0 +1,29 @@
+# Stack-level environment variables that upstream's compose file does not expose.
+#
+# Upstream enumerates every variable it passes to the app services -- 16 for
+# langfuse-web -- so a variable it does not list never reaches the container no
+# matter what `.env` says. `--env-file` supplies values for *interpolation*, not
+# automatic passthrough. This file declares the extras.
+#
+# Passed explicitly as a `--file` by the Makefile. Compose only auto-loads a file
+# by this name from the project directory, which here is the upstream clone, so
+# the name is conventional rather than magic.
+services:
+  langfuse-web:
+    environment: &extra_env
+      # Which ClickHouse tables ingestion writes.
+      #
+      #   events_only (upstream default) -- writes only events_core/events_full.
+      #     The trace detail view reads those, so traces and their costs appear,
+      #     but dashboards and charts read the legacy observations/traces tables
+      #     and show nothing. GET /api/public/traces is also disabled.
+      #   dual -- writes both, so dashboards work. Upstream describes this as a
+      #     migration bridge rather than a steady state. It does not backfill:
+      #     only traces ingested after the switch appear in charts.
+      #   legacy -- writes only the legacy tables.
+      LANGFUSE_MIGRATION_V4_WRITE_MODE: ${LANGFUSE_MIGRATION_V4_WRITE_MODE:-events_only}
+
+  # Both app services must agree: ingestion is split across them, and a split
+  # brain writes some rows to one set of tables and some to the other.
+  langfuse-worker:
+    environment: *extra_env

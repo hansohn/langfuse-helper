@@ -1,0 +1,5 @@
+{
+  "env": {
+    "CC_LANGFUSE_TRACE_TAGS": "repo:langfuse-helper"
+  }
+}
