@@ -31,114 +31,54 @@ To run Langfuse: `git`, `openssl`, `curl`, and Docker with the Compose plugin.
 `make langfuse/check` verifies the host tools; `make docker/check` verifies the
 daemon.
 
-To trace Claude Code as well (see [Tracing Claude Code](#tracing-claude-code)):
-
-| Tool | Needed for | Why |
-| --- | --- | --- |
-| `python3` (3.10+) | `trace/project`, `trace/tag` | the two helper scripts in [`scripts/`](scripts) |
-| [`uv`](https://docs.astral.sh/uv/) | the plugin's hook | it resolves the hook's pinned `langfuse` SDK; **without it tracing fails silently** |
+To trace Claude Code as well, `python3` 3.10+ (for the helpers in
+[`scripts/`](scripts)) and [`uv`](https://docs.astral.sh/uv/) — **without `uv`
+tracing fails silently** (see [Setup](#setup)). `make trace/check` verifies both.
 
 ```bash
 brew install uv        # or: curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-`make trace/check` verifies both.
-
 ## Quick start
 
-```bash
-make dev/up
-```
-
-Clones upstream, writes `.env` with random secrets, starts six containers, and
-blocks until `/api/public/health` responds (~2-3 min cold). Then open
-<http://localhost:3000> and sign in with your git email and the password it
-printed.
-
-`dev/up` writes a headless provisioning block by default, so the org, project,
-user and API keys are created for you and the command prints the password. Pass
-`HEADLESS=false` to skip that and sign up through the UI instead — but decide
-now, because Langfuse provisions **only on first start** and changing your mind
-later means `make clean`, which destroys your volumes. See
-[Setting up from scratch](#setting-up-from-scratch).
-
-## Setting up from scratch
-
-**1. Host tools.** See [Requirements](#requirements). For tracing also `uv` and
-`python3` 3.10+.
-
-**2. Configure and start.**
+**1. Start Langfuse.**
 
 ```bash
 git clone <this repo> && cd langfuse-helper
-make dev/up
+make dev/up                # or TRACE=true make dev/up to also trace Claude Code
 ```
 
-To also trace Claude Code, opt in on the first run:
+This clones upstream, writes `.env` with random secrets, starts six containers,
+blocks until `/api/public/health` responds (~2-3 min cold), and provisions your
+org, project, user and API keys. It prints a password: sign in at
+<http://localhost:3000> with your git email and that password.
 
-```bash
-TRACE=true make dev/up
-```
+Provisioning is on by default because Langfuse provisions **only on first
+start**. `make dev/up HEADLESS=false` skips it so you sign up through the UI
+instead — but decide now, since changing your mind later means `make clean`,
+which destroys your volumes. See [Headless provisioning](#headless-provisioning).
 
-`dev/up` clones upstream, generates `.env` **with a headless provisioning block**,
-starts six containers, waits for health, and provisions your org/project/user/keys.
-With `TRACE=true` it also creates the tracing project and installs and configures
-the plugin. You only need `TRACE=true` once: after that the key pair in `.env` and
-the installed plugin both signal that tracing is wanted, so a plain `make dev/up`
-keeps it working (including after `make clean`).
+`TRACE=true` also creates the tracing project and installs and configures the
+Langfuse plugin. It is needed only once; see [Setup](#setup).
 
-Every tracing step is a no-op when it has nothing to do, so re-running `dev/up`
-daily costs nothing and prints nothing extra.
-
-It prints the password for the account it created — sign in at
-<http://localhost:3000> with your git email.
-
-**3. Label each repo you want to tell apart.**
+**2. Label each repo you want to tell apart** (tracing only).
 
 ```bash
 make trace/tag ~/Code/my-existing-repo
 ```
 
-**4. Restart Claude Code in that repo.** Hooks and environment are read at session
+**3. Restart Claude Code in that repo.** Hooks and environment are read at session
 launch, so a session already running is never traced. This is the one step nothing
 can automate.
-
-### Variations
-
-```bash
-make dev/up HEADLESS=false     # no provisioning block; sign up in the UI instead
-make trace/install             # just the plugin, e.g. after rotating keys
-make trace/check               # just the host-tool check
-```
-
-The tracing steps in `dev/up` are all conditional, so it does nothing unasked:
-
-| Step | Skipped when |
-| --- | --- |
-| `trace/project` | nothing indicates tracing is wanted: `TRACE` is not `true`, no `LANGFUSE_TRACE_*` in `.env`, **and** the plugin is not installed |
-| `trace/install` | no key pair, **or** the installed plugin already carries the current one |
-
-Both conditions matter after `make clean`, which deletes `.env`. The
-plugin-installed signal is what makes a reset recoverable: a cold `make dev/up`
-sees the plugin, provisions the project, issues a key pair, notices the plugin's
-stored key no longer matches, and reconfigures it. Without that second signal the
-rebuild would skip tracing entirely while the plugin kept its dead key — and since
-Langfuse swallows the resulting 401s, tracing would break with no visible error.
-
-`trace/install` warns rather than fails when the `claude` CLI is absent, so
-`dev/up` still works in CI or a container.
-
-Headless provisioning is the default because Langfuse provisions **only on first
-start** and `trace/project` signs in with those credentials. Opting out and
-changing your mind later means `make clean`, which destroys volumes.
 
 ## Daily use
 
 ```bash
-make dev/up         # start (idempotent; safe to re-run)
+make dev/up         # start (idempotent; also the default, so plain `make` works)
 make docker/ps      # what is running
 make docker/logs    # tail logs; SERVICE=langfuse-web to narrow
 make dev/down       # stop for the day, keeping all data
+make help           # every target, with its purpose
 ```
 
 `dev/down` is an alias for `docker/down`. It removes containers but **preserves
@@ -147,11 +87,9 @@ volumes**, so the next `make dev/up` picks up where you left off. All services a
 
 ## Headless provisioning
 
-`make langfuse/env` writes a `LANGFUSE_INIT_*` block by default, so `dev/up`
-provisions the org, project, user and a working API key pair with no UI steps. The
-account uses your `git config user.email`; the password is generated and printed.
-
-Override any of it:
+`make langfuse/env` writes a `LANGFUSE_INIT_*` block into `.env` by default. The
+account uses your `git config user.email`; the password and API key pair are
+generated. Override any of it:
 
 ```bash
 make langfuse/env HEADLESS_PROJECT_ID=my-project HEADLESS_EMAIL=me@example.com
@@ -164,7 +102,8 @@ in the fresh database and apps configured with them keep working. Without pinnin
 every volume reset means fetching new keys from the UI. `make clean` also deletes
 `.env` (keeping a copy as `.env.bak`), so a full clean always issues new keys.
 
-To apply the block to an already-running stack:
+`dev/up` applies the block as its last step. To apply it to an already-running
+stack:
 
 ```bash
 make langfuse/bootstrap
@@ -177,13 +116,9 @@ actually holds (rather than echoing back your env file), ending with the
 `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` block to paste
 into your application.
 
-`dev/up` runs bootstrap as its last step, so with the block configured a single
-`make dev/up` provisions everything. Without it, bootstrap is a silent no-op.
-
-Provisioning applies **only on first run**, and creates exactly **one** project —
-the variables are singular. Once a user exists Langfuse ignores `LANGFUSE_INIT_*`
-entirely, so it cannot rotate a key or add a second project. Do those in the UI
-(see [Projects](#projects)).
+Provisioning creates exactly **one** project — the variables are singular — and
+once a user exists Langfuse ignores `LANGFUSE_INIT_*` entirely, so it cannot
+rotate a key or add a second project. Do those in the UI.
 
 ## Projects
 
@@ -193,32 +128,20 @@ every trace row, and dashboards, retention, and API keys are all per project. So
 project boundary is a permanent analysis boundary: two applications sharing one
 project means interleaved traces you cannot practically separate later.
 
-Claude Code traces are the deliberate exception: they share a single project across
-every repo, because the point is comparing a skill's behaviour *between* repos. See
+Do **not** split by environment or, for Claude Code, by repo — see
 [One project for every repo](#one-project-for-every-repo).
-
-This repo needs no project of its own: it is infrastructure that runs the server
-and instruments no application. It does trace its own Claude Code sessions, but
-those go to the shared Claude Code project like every other repo's — see
-[Tracing Claude Code](#tracing-claude-code).
 
 ### Adding a project
 
-`langfuse/bootstrap` provisions your first project. Every one after that is
-created in the UI, which is also the quickest way to add one at any time — it
-needs no teardown and does not touch the running stack:
+Every project after the first is created in the UI. It needs no teardown and does
+not touch the running stack:
 
 1. <http://localhost:3000> → your org → **New Project**
 2. **Settings → API Keys → Create**, and copy the secret key immediately
 
-There is a REST endpoint for this (`POST /api/public/projects`), but it needs the
-`admin-api` entitlement, which belongs to `self-hosted:enterprise` — an
-unlicensed deployment reports plan `oss` and gets 403. The UI is the path here.
-
 Keys made this way are generated by Langfuse rather than pinned in `.env`, so
-store them with the repo they belong to. Only re-provision
-(`make clean && make dev/up`) if you specifically want a clean slate with keys you
-control from `.env` — it is never *required* just to add a project.
+store them with the repo they belong to. Re-provisioning
+(`make clean && make dev/up`) is never *required* just to add a project.
 
 ### Naming
 
@@ -236,24 +159,6 @@ Postgres tables, so changing it means re-provisioning rather than renaming, and
 existing traces would be orphaned. Pick it before you accumulate data worth
 keeping.
 
-### Do not split by environment
-
-Use one project across all environments and separate them with the tracing
-environment instead:
-
-```bash
-LANGFUSE_TRACING_ENVIRONMENT=development   # or staging / production
-```
-
-Same project, same keys, filterable in the UI. A project per environment
-fragments dashboards and multiplies key management for no benefit. Likewise a
-monorepo usually wants one project with per-service spans, unless the services
-are genuinely owned separately.
-
-The same reasoning applies to Claude Code traces, which share one project across
-every repo: repo is a filterable field (see
-[One project for every repo](#one-project-for-every-repo)), not a project split.
-
 ## Integrating an application
 
 This deploys **Langfuse v4**. Point your app at:
@@ -264,6 +169,9 @@ LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 ```
 
+If your app runs in another container, use `http://langfuse-web:3000` on the
+compose network rather than `localhost`.
+
 Use a **v4 SDK or OTLP** (`POST /api/public/otel/v1/traces`). A v2/v3 SDK posting
 trace events to `/api/public/ingestion` is rejected:
 
@@ -272,7 +180,7 @@ trace events to `/api/public/ingestion` is rejected:
 
 As a migration bridge for an SDK you cannot upgrade yet, set
 `LANGFUSE_MIGRATION_V4_WRITE_MODE=dual` in `.env` and recreate the app services.
-Setting it in `.env` alone does **nothing**: upstream's compose file enumerates
+Setting it in `.env` alone would do **nothing**: upstream's compose file enumerates
 every variable it passes, so one it does not list never reaches the container.
 [`docker-compose.override.yml`](docker-compose.override.yml) declares it, which is
 what makes the `.env` value take effect.
@@ -282,12 +190,9 @@ which `events_only` leaves empty. It does **not** backfill, so switching makes
 pre-existing traces invisible to any UI path reading those tables — which is why
 this repo stays on `events_only` and accepts that charts are empty.
 
-Two other v4 notes: the public `GET /api/public/traces` read endpoint is disabled
-in events-only mode (read traces in the UI), and ingested traces take a few
-seconds to appear because the worker batches writes.
-
-If your app runs in another container, use `http://langfuse-web:3000` on the
-compose network rather than `localhost`.
+In events-only mode the public `GET /api/public/traces` endpoint is also
+disabled, so read traces in the UI. They take a few seconds to appear because the
+worker batches writes.
 
 ## Tracing Claude Code
 
@@ -305,16 +210,7 @@ ingest. The transcript has both sides, so the plugin does.
 
 ### Setup
 
-The commands are in [Setting up from scratch](#setting-up-from-scratch).
-What those steps do not explain:
-
-**`make trace/project` needs `LANGFUSE_INIT_USER_EMAIL` and `_PASSWORD` in
-`.env`** to log in, because it drives the same routes the UI uses. If you provisioned with
-[Headless provisioning](#headless-provisioning) they are already there. If you
-signed up through the UI instead, either add them to `.env` or skip the target:
-create the project and an API key pair in the UI and put them in
-`LANGFUSE_TRACE_PUBLIC_KEY` / `_SECRET_KEY` yourself. The target says as much if
-they are missing.
+The commands are in [Quick start](#quick-start). What they do not explain:
 
 **`uv` is required.** The plugin's hook declares its dependency
 (`langfuse>=4.7,<5`) as PEP 723 inline metadata, and `hooks.json` runs it with
@@ -322,10 +218,36 @@ they are missing.
 `uv` the dependency is not installed, the import fails, and **tracing silently
 stops** — the hook logs and exits 0 by design, so nothing surfaces.
 
-Credentials live in the plugin's own machine-scope config, so tracing is on for
-every repo and **no secret ever enters this or any other repo**. Claude Code puts
-the secret in the OS keychain; only the public key and base URL land in
-`~/.claude/settings.json`.
+**`make trace/project` needs `LANGFUSE_INIT_USER_EMAIL` and `_PASSWORD` in
+`.env`** to log in, because it drives the same routes the UI uses. Headless
+provisioning puts them there. If you signed up through the UI instead, either add
+them to `.env` or skip the target: create the project and an API key pair in the
+UI and put them in `LANGFUSE_TRACE_PUBLIC_KEY` / `_SECRET_KEY` yourself. The
+target says as much if they are missing.
+
+**Credentials never enter a repo.** They live in the plugin's own machine-scope
+config, so tracing is on for every repo. Claude Code puts the secret in the OS
+keychain; only the public key and base URL land in `~/.claude/settings.json`.
+
+**`TRACE=true` is needed once.** The tracing steps in `dev/up` are conditional,
+so a plain `make dev/up` does nothing unasked:
+
+| Step | Skipped when |
+| --- | --- |
+| `trace/project` | nothing indicates tracing is wanted: `TRACE` is not `true`, no `LANGFUSE_TRACE_*` in `.env`, **and** the plugin is not installed |
+| `trace/install` | no key pair, **or** the installed plugin already carries the current one |
+
+After the first run, the key pair in `.env` and the installed plugin both signal
+that tracing is wanted. The plugin signal is what makes `make clean` (which
+deletes `.env`) recoverable: a cold `make dev/up` sees the plugin, provisions the
+project, issues a key pair, notices the plugin's stored key no longer matches,
+and reconfigures it. Without it the rebuild would skip tracing while the plugin
+kept its dead key — and since Langfuse swallows the resulting 401s, tracing would
+break with no visible error.
+
+`trace/install` warns rather than fails when the `claude` CLI is absent, so
+`dev/up` still works in CI or a container. Run it alone (`make trace/install`)
+after rotating keys.
 
 ### What lands automatically
 
@@ -350,7 +272,7 @@ one project and analytical queries are project-scoped. Splitting by repo would m
 "how does this skill behave across my repos" unanswerable, which is usually the
 reason to trace skills at all.
 
-Repos are told apart three ways, all queryable:
+Repos are told apart by a tag:
 
 ```bash
 make trace/tag ~/Code/my-repo                       # tag defaults to the dir name
@@ -368,13 +290,15 @@ It holds no secret, so committing it is safe and the label travels with the clon
 `cwd`/`project`/`git_branch` metadata is added by the plugin regardless, so an
 untagged repo is still identifiable — the tag just gives you a filter facet
 alongside `skill:*`. Both targets are idempotent, preserve sibling tags and other
-settings keys, refuse a file that is not valid JSON, and prune the obsolete
-variables left by the OTel-collector setup this replaced.
+settings keys, and refuse a file that is not valid JSON.
 
-Environments are **not** a reason to split projects either. The plugin does not set
-Langfuse's `environment` field, but the Langfuse SDK reads
-`LANGFUSE_TRACING_ENVIRONMENT` itself, so set that in the plugin config to separate
-`development` / `staging` / `production` within the one project.
+The same reasoning applies to environments, for Claude Code and applications
+alike: use one project and set `LANGFUSE_TRACING_ENVIRONMENT` (`development` /
+`staging` / `production`), which the Langfuse SDK reads itself — in your app's
+environment, or in the plugin config for Claude Code, since the plugin does not
+set Langfuse's `environment` field itself. A project per environment fragments dashboards and multiplies key
+management for no benefit. Likewise a monorepo usually wants one project with
+per-service spans, unless the services are genuinely owned separately.
 
 ### Tracing caveats
 
@@ -395,10 +319,6 @@ identifiable.
 bodies — including file contents from `Read`/`Edit` — all go to Langfuse. That is
 the point of it, but it is a larger surface than infrastructure telemetry, so decide
 deliberately before pointing it at anything shared.
-
-**Traces take a few seconds** to appear: the hook fires at turn end and the worker
-batches writes. `GET /api/public/traces` is disabled in events-only mode, so read
-in the UI.
 
 ## Backup and restore
 
@@ -431,47 +351,6 @@ loading so their target tables are not written twice.
 
 Known limitation: ClickHouse dumps load with `INSERT`, which appends. Restore
 into a clean stack or rows can duplicate.
-
-## Targets
-
-`make help` lists every target with its purpose. Reproduced here, and generated
-from the `##` comments in the [`Makefile`](Makefile) so the two cannot disagree:
-
-```console
-$ make help
-Available targets:
-
-  clean                               Remove compose state, langfuse source and .env (keeps backups)
-  dev/down                            Stop everything for the day, keeping all data
-  dev/up                              Clone, configure and start Langfuse (default goal)
-  docker/check                        Verify the Docker daemon is running and the compose file exists
-  docker/clean                        Remove compose containers, networks and volumes (prompts first)
-  docker/down                         Remove compose containers and networks, preserving volumes
-  docker/logs                         Tail compose service logs
-  docker/ps                           Show compose service status, including stopped containers
-  docker/up                           Create and start compose services, restarting any that are stopped
-  help                                Help screen
-  help/all                            Display help for all targets
-  help/short                          This help short screen
-  langfuse/backup                     Back up datastores and the encryption key
-  langfuse/bootstrap                  Provision the initial org, project, user and API keys
-  langfuse/check                      Verify required host dependencies are installed
-  langfuse/clone                      Clone or update langfuse source at LANGFUSE_VERSION
-  langfuse/env                        Generate env file with random secrets (headless provisioning by default)
-  langfuse/restore                    Restore datastores from BACKUP_DEST
-  langfuse/wait                       Wait for the langfuse web service to become healthy
-  trace/check                         Verify the host tools tracing needs
-  trace/install                       Install and configure the Langfuse plugin (idempotent, machine-scope)
-  trace/project                       Ensure the tracing project and API keys exist (idempotent)
-  trace/tag                           Label a repo's traces with repo:<name> (idempotent)
-  trace/untag                         Remove the repo:<name> tag from a repo
-```
-
-`help/all` includes targets from every included makefile. Running `make` with no
-goal runs `dev/up`, not help.
-
-There is deliberately no `docker/build` or `docker/push`: every service uses a
-prebuilt image, so the compose file has no `build:` sections.
 
 ## Variables
 
@@ -533,14 +412,11 @@ Multimodal tracing needs extra blob-storage configuration because the bundled
 MinIO is not reachable outside the Docker network for direct uploads.
 
 `make trace/project` drives Langfuse's internal tRPC routes, because the REST
-equivalent (`POST /api/public/projects`) needs the enterprise-only `admin-api`
-entitlement. Those routes carry no stability guarantee — an upstream change breaks
-it loudly at the project-creation step, and the fallback is to create the project
-and keys in the UI and set `LANGFUSE_TRACE_*` by hand.
-
-Tracing caveats specific to the plugin are in
-[Tracing caveats](#tracing-caveats) — the important one is that delivery is
-at-most-once.
+equivalent (`POST /api/public/projects`) needs the `admin-api` entitlement, which
+belongs to `self-hosted:enterprise` — an unlicensed deployment reports plan `oss`
+and gets 403. The tRPC routes carry no stability guarantee: an upstream change
+breaks the target loudly at the project-creation step, and the fallback is to
+create the project and keys in the UI and set `LANGFUSE_TRACE_*` by hand.
 
 ## License
 
