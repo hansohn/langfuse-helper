@@ -1,6 +1,6 @@
 <div align="center">
   <h1>langfuse-helper</h1>
-  <p>Run self-hosted <a href="https://langfuse.com">Langfuse</a> locally with one <code>make</code> command, and trace Claude Code into it</p>
+  <p>Run self-hosted Langfuse locally and trace Claude Code into it</p>
   <p>
     <!-- Build Status -->
     <a href="https://github.com/hansohn/langfuse-helper/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/hansohn/langfuse-helper/ci.yml?style=for-the-badge"></a>
@@ -10,6 +10,8 @@
     <a href="https://github.com/hansohn/langfuse-helper/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/hansohn/langfuse-helper.svg?style=for-the-badge"></a>
   </p>
 </div>
+
+## Description
 
 Makefile wrapper for running [Langfuse](https://langfuse.com) locally via Docker
 Compose, following the [self-hosting compose guide](https://langfuse.com/self-hosting/deployment/docker-compose).
@@ -539,3 +541,7 @@ and keys in the UI and set `LANGFUSE_TRACE_*` by hand.
 Tracing caveats specific to the plugin are in
 [Tracing caveats](#tracing-caveats) — the important one is that delivery is
 at-most-once.
+
+## License
+
+This project is licensed under the terms specified in [LICENSE](LICENSE.md).
