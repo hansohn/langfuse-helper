@@ -109,7 +109,10 @@ class Claude:
         # python3, the import fails, and the hook exits 0 -- so tracing stops
         # with nothing to see.
         if not shutil.which("uv"):
-            sys.exit("[ERROR] uv is not installed. Claude Code tracing fails silently without it: 'brew install uv'.")
+            sys.exit(
+                "[ERROR] uv is not installed. Claude Code tracing fails silently without it.\n"
+                "[ERROR] Install it: https://docs.astral.sh/uv/getting-started/installation/"
+            )
         print(f"[INFO] claude: uv {'.'.join(map(str, tool_version(['uv', '--version']) or ()))} present.")
 
     def installed(self):
@@ -136,7 +139,10 @@ class Claude:
                 "--config", f"LANGFUSE_BASE_URL={url}",
             ]
         )
-        print("[INFO] claude: plugin configured. The secret is in the OS keychain, not in a file.")
+        # Where Claude Code keeps credentials: the Keychain on macOS, a mode-600
+        # file under ~/.claude elsewhere. Say which, rather than promising a keychain.
+        store = "the macOS Keychain" if sys.platform == "darwin" else "~/.claude/.credentials.json (mode 600)"
+        print(f"[INFO] claude: plugin configured. The secret is in {store}, not in a repo.")
         print("[INFO] claude: restart any running session -- hooks load at launch.")
 
     def manual(self, url):
