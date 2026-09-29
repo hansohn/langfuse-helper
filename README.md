@@ -1,13 +1,13 @@
 <div align="center">
   <h1>langfuse-helper</h1>
-  <p>Makefile wrapper for running [Langfuse](https://langfuse.com) locally via Docker</p>
+  <p>Run self-hosted <a href="https://langfuse.com">Langfuse</a> locally with one <code>make</code> command, and trace Claude Code into it</p>
   <p>
     <!-- Build Status -->
-    <a href="https://github.com/hansohn/langfuse-helper/actions/workflows/shellcheck.yml"><img src="https://img.shields.io/github/actions/workflow/status/hansohn/langfuse-helper/shellcheck.yml?style=for-the-badge"></a>
+    <a href="https://github.com/hansohn/langfuse-helper/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/hansohn/langfuse-helper/ci.yml?style=for-the-badge"></a>
     <!-- Github Tag -->
-    <a href="https://github.com/hansohn/langfuse-helper/tags/"><img src="https://img.shields.io/github/v/tag/hansohn/langfuse-helper?style=for-the-badge&sort=semver"></a>
+    <a href="https://github.com/hansohn/langfuse-helper/tags/"><img alt="Latest tag" src="https://img.shields.io/github/v/tag/hansohn/langfuse-helper?style=for-the-badge&sort=semver"></a>
     <!-- License -->
-    <a href="https://github.com/hansohn/langfuse-helper/blob/main/LICENSE.md"><img src="https://img.shields.io/github/license/hansohn/langfuse-helper.svg?style=for-the-badge"></a>
+    <a href="https://github.com/hansohn/langfuse-helper/blob/main/LICENSE.md"><img alt="License" src="https://img.shields.io/github/license/hansohn/langfuse-helper.svg?style=for-the-badge"></a>
   </p>
 </div>
 
