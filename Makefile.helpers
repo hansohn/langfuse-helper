@@ -8,10 +8,10 @@ DEFAULT_HELP_TARGET ?= help/short
 HELP_FILTER ?= .*
 
 # Color definitions - more efficient than shell calls
-GREEN := \x1b[32;01m
-YELLOW := \x1b[33;01m
-RED := \x1b[31;01m
-RESET := \x1b[0m
+GREEN := \033[32;01m
+YELLOW := \033[33;01m
+RED := \033[31;01m
+RESET := \033[0m
 
 # Declare phony targets
 .PHONY: default help help/all help/short help/generate test/assert test/assert-set test/assert-unset
@@ -63,7 +63,7 @@ help/generate:
 	        helpMessage = substr(lastLine, RSTART + 3, RLENGTH); \
 	        gsub("\\\\", "", helpCommand); \
 	        gsub(":+$$", "", helpCommand); \
-	        printf "  \x1b[32;01m%-35s\x1b[0m %s\n", helpCommand, helpMessage; \
+	        printf "  \033[32;01m%-35s\033[0m %s\n", helpCommand, helpMessage; \
 	    } \
 	} \
 	{ lastLine = $$0 }' $(MAKEFILE_LIST) | sort -u

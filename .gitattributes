@@ -1,0 +1,3 @@
+# LF everywhere: a CRLF Makefile or script breaks bash recipes with $'\r' errors,
+# which is what a Windows checkout used from WSL would otherwise get.
+* text=auto eol=lf
