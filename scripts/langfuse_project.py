@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
-"""Idempotently ensure a Langfuse project and API key pair exist for tracing.
+"""Idempotently ensure a Langfuse project and API key pair exist.
 
-Driven by 'make trace/project'. Exists because 'make clean' regenerates SALT and
+Driven by 'make trace/project' (one pair per traced harness) and by
+litellm-helper's 'make langfuse/project' (the proxy's pair), which calls this
+file rather than keeping a copy. Exists because 'make clean' regenerates SALT and
 deletes .env, which invalidates every key in the database -- and LANGFUSE_INIT_*
 only ever provisions ONE project, on first run. Without this, a reset silently
-costs you the tracing project and its keys, to be rebuilt by hand in the UI.
+costs you each project's keys, to be rebuilt by hand in the UI.
 
 Uses the same tRPC routes the UI calls. The REST equivalent
 (POST /api/public/projects) needs the 'admin-api' entitlement, which belongs to
 self-hosted:enterprise; an unlicensed deployment reports plan 'oss' and gets 403.
 
 Inputs (environment):
-  ENV_FILE       path to .env  (read for credentials, written for the key pair)
-                 The plugin does NOT read this file -- it is the store this script
-                 checks for idempotency, and the source of the values to paste
-                 into the plugin's own machine-scope config.
-  LANGFUSE_URL   base URL of the web service
-  PROJECT_NAME   display name of the project to find or create
-
-Reads LANGFUSE_INIT_USER_EMAIL / _PASSWORD and LANGFUSE_INIT_ORG_ID from ENV_FILE.
-Writes LANGFUSE_TRACE_PUBLIC_KEY / _SECRET_KEY back into it.
+  ENV_FILE              .env the key pair is written to, and read from to check
+                        whether the pair already works
+  CREDENTIALS_ENV_FILE  langfuse-helper's .env, read (never written) for
+                        LANGFUSE_INIT_USER_EMAIL / _PASSWORD / _ORG_ID.
+                        Defaults to ENV_FILE.
+  LANGFUSE_URL          base URL of the web service
+  PROJECT_NAME          display name of the project to find or create
+  PROJECT_ID            optional. Found by ID first, so renaming a project's
+                        display name never creates a second one.
+  KEY_PREFIX            writes <KEY_PREFIX>_PUBLIC_KEY / _SECRET_KEY
+                        (default: LANGFUSE_TRACE)
+  KEY_NOTE              note shown on the key in Settings -> API Keys
+  HEADING               comment written above the pair when it is first added
 """
 import base64
 import json
@@ -31,6 +37,10 @@ import urllib.request
 from http.cookiejar import CookieJar
 from pathlib import Path
 
+# Resolves because Python puts this script's own directory on sys.path, including
+# when litellm-helper runs it by absolute path.
+from env_file import read_env, write_env_keys
+
 
 def require(name):
     """Read a required input, failing the same way as every other error here."""
@@ -38,84 +48,6 @@ def require(name):
     if not value:
         sys.exit(f"[ERROR] {name} is required.")
     return value
-
-
-def write_atomic(path, text, mode=0o600):
-    """Write via a temp file in the same directory, then rename over the target.
-
-    This file holds SALT and ENCRYPTION_KEY. An interrupted or out-of-space
-    in-place write would truncate it, and losing SALT invalidates every API key
-    in the database while losing ENCRYPTION_KEY makes stored LLM credentials
-    permanently unreadable. os.replace is atomic on one filesystem, and the temp
-    file is created 0600 so secrets are never briefly world-readable.
-    """
-    tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
-    try:
-        with os.fdopen(fd, "w") as handle:
-            handle.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-
-
-def read_env(path):
-    """Minimal .env reader. Values may contain spaces and '='.
-
-    A matched pair of surrounding quotes is stripped. Line endings are normalised
-    to LF when the file is rewritten.
-    """
-    values = {}
-    if not path.exists():
-        return values
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        value = value.strip()
-        # Unwrap a matched quote pair; docker compose accepts quoted values, and
-        # leaving the quotes on turns a correct password into a login failure.
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        values[key.strip()] = value
-    return values
-
-
-# Written by the OTel-collector setup this replaced: a base64 basic-auth header
-# derived from the key pair. Nothing reads it now, and a stale value derived from a
-# rotated pair is worse than none, so it is dropped whenever this file is rewritten.
-DERIVED_VARS = ("LANGFUSE_AUTH_B64",)
-
-
-def write_env_keys(path, pairs):
-    """Replace or append each key, preserving every other line and its order."""
-    lines = path.read_text().splitlines() if path.exists() else []
-    remaining = dict(pairs)
-    seen = set()
-    out = []
-    for line in lines:
-        key = line.split("=", 1)[0].strip() if "=" in line else None
-        if key in DERIVED_VARS:
-            continue
-        if key in remaining:
-            out.append(f"{key}={remaining.pop(key)}")
-            seen.add(key)
-        elif key is not None and key in seen:
-            # A duplicate assignment of a key we already rewrote. Readers here
-            # take last-wins while this writer rewrites the first occurrence, so
-            # leaving it would make the file never converge and mint a new key
-            # pair on every run.
-            continue
-        else:
-            out.append(line)
-    if remaining:
-        if out and out[-1].strip():
-            out.append("")
-        out.append("# --- claude code tracing (written by 'make trace/project') ---")
-        out.extend(f"{k}={v}" for k, v in remaining.items())
-    write_atomic(path, "\n".join(out) + "\n")
 
 
 class Client:
@@ -152,14 +84,20 @@ class Client:
                 "json": "true",
             }
         ).encode()
-        self.opener.open(
-            urllib.request.Request(
-                f"{self.base}/api/auth/callback/credentials",
-                data=data,
-                method="POST",
-            ),
-            timeout=30,
-        )
+        try:
+            self.opener.open(
+                urllib.request.Request(
+                    f"{self.base}/api/auth/callback/credentials",
+                    data=data,
+                    method="POST",
+                ),
+                timeout=30,
+            )
+        except urllib.error.HTTPError as exc:
+            # NextAuth answers a bad password with an error status on some
+            # versions; the session check below gives the actionable message.
+            if exc.code >= 500:
+                sys.exit(f"[ERROR] Login failed ({exc.code}) at {self.base}.")
         session = self.get("/api/auth/session")
         if not session.get("user"):
             sys.exit("[ERROR] Login failed. Check LANGFUSE_INIT_USER_EMAIL/_PASSWORD.")
@@ -187,12 +125,13 @@ class Client:
             sys.exit(
                 f"[ERROR] {route} returned an unexpected shape. The internal tRPC\n"
                 f"[ERROR] API may have changed upstream; create the project and keys\n"
-                f"[ERROR] in the UI and set LANGFUSE_TRACE_* by hand."
+                f"[ERROR] in the UI and set the key pair by hand."
             )
 
 
 def key_project(base, public_key, secret_key):
-    """Name of the project a key pair belongs to, or None if it cannot authenticate.
+    """The project a key pair belongs to, as a dict with 'id' and 'name', or None
+    if the pair cannot authenticate.
 
     A pair only authenticates while SALT is unchanged, and this endpoint returns
     the key's own project, so one call answers both "do these still work" and
@@ -217,40 +156,56 @@ def key_project(base, public_key, secret_key):
     except OSError as exc:
         sys.exit(f"[ERROR] Cannot reach {base}: {exc}")
     projects = payload.get("data") or []
-    return projects[0].get("name") if projects else None
+    return projects[0] if projects else None
 
 
 def main():
     env_file = Path(require("ENV_FILE"))
+    credentials_file = Path(os.environ.get("CREDENTIALS_ENV_FILE") or env_file)
     base = require("LANGFUSE_URL")
     project_name = require("PROJECT_NAME")
+    project_id = os.environ.get("PROJECT_ID") or None
+    prefix = os.environ.get("KEY_PREFIX") or "LANGFUSE_TRACE"
+    note = os.environ.get("KEY_NOTE") or "langfuse-helper"
+    heading = os.environ.get("HEADING") or f"# --- {prefix} (written by langfuse-helper) ---"
+    public_var, secret_var = f"{prefix}_PUBLIC_KEY", f"{prefix}_SECRET_KEY"
 
     env = read_env(env_file)
-    email = env.get("LANGFUSE_INIT_USER_EMAIL")
-    password = env.get("LANGFUSE_INIT_USER_PASSWORD")
-    org_id = env.get("LANGFUSE_INIT_ORG_ID")
+    public_key = env.get(public_var)
+    secret_key = env.get(secret_var)
 
-    public_key = env.get("LANGFUSE_TRACE_PUBLIC_KEY")
-    secret_key = env.get("LANGFUSE_TRACE_SECRET_KEY")
-
+    # Matching on ID or name: a project created from PROJECT_NAME (no headless
+    # provisioning, so no known ID) gets a random ID, and comparing on ID alone
+    # would then mint a new pair on every run.
     current = key_project(base, public_key, secret_key)
-    if current == project_name:
-        print(f"[INFO] LANGFUSE_TRACE_* keys already authenticate for '{project_name}'.")
+    if current and (current.get("id") == project_id or current.get("name") == project_name):
+        print(f"[INFO] {prefix}_* keys already authenticate for '{current.get('name')}'.")
         return 0
+
+    if not credentials_file.exists():
+        sys.exit(
+            f"[ERROR] Langfuse env file '{credentials_file}' not found. Create the project\n"
+            f"[ERROR] and keys in the UI and set {public_var}/_SECRET_KEY in\n"
+            f"[ERROR] {env_file} by hand."
+        )
+    credentials = read_env(credentials_file)
+    email = credentials.get("LANGFUSE_INIT_USER_EMAIL")
+    password = credentials.get("LANGFUSE_INIT_USER_PASSWORD")
+    org_id = credentials.get("LANGFUSE_INIT_ORG_ID")
 
     if not (email and password):
         sys.exit(
-            "[ERROR] Need LANGFUSE_INIT_USER_EMAIL and _PASSWORD in the env file to\n"
-            "[ERROR] create the project. Set them, or create the project and keys in\n"
-            "[ERROR] the UI and put the pair in LANGFUSE_TRACE_PUBLIC_KEY/_SECRET_KEY."
+            f"[ERROR] Need LANGFUSE_INIT_USER_EMAIL and _PASSWORD in '{credentials_file}'\n"
+            f"[ERROR] to create the project. Headless provisioning writes them. If you\n"
+            f"[ERROR] signed up through the UI instead, create the project and an API key\n"
+            f"[ERROR] pair there and set {public_var}/_SECRET_KEY in {env_file}."
         )
 
     if current:
-        # Valid keys, wrong project: the caller changed TRACE_PROJECT_NAME.
-        print(f"[INFO] Keys currently point at '{current}', not '{project_name}'.")
+        print(f"[INFO] Keys currently point at '{current.get('name')}', not '{project_name}'.")
         print("[INFO] Issuing a pair for the requested project instead.")
     elif public_key or secret_key:
-        print("[WARN] LANGFUSE_TRACE_* keys are set but do not authenticate.")
+        print(f"[WARN] {prefix}_* keys are set but do not authenticate.")
         print("[WARN] Expected after 'make clean', which regenerates SALT. Reissuing.")
 
     client = Client(base)
@@ -258,7 +213,7 @@ def main():
 
     orgs = session.get("user", {}).get("organizations") or []
     if not orgs:
-        sys.exit("[ERROR] User belongs to no organization. Run 'make langfuse/bootstrap'.")
+        sys.exit("[ERROR] User belongs to no organization. Run langfuse-helper's 'make langfuse/bootstrap'.")
     if org_id:
         org = next((o for o in orgs if o.get("id") == org_id), None)
         if org is None:
@@ -270,42 +225,28 @@ def main():
     else:
         org = orgs[0]
 
-    project = next(
-        (p for p in org.get("projects", []) if p.get("name") == project_name), None
+    projects = org.get("projects", [])
+    project = next((p for p in projects if project_id and p.get("id") == project_id), None) or next(
+        (p for p in projects if p.get("name") == project_name), None
     )
     if project:
-        project_id = project["id"]
-        print(f"[INFO] Reusing project '{project_name}' ({project_id}).")
+        found_id = project["id"]
+        print(f"[INFO] Reusing project '{project.get('name')}' ({found_id}).")
     else:
         created = client.trpc(
             "projects.create",
             {"name": project_name, "orgId": org["id"], "retention": 0},
         )
-        project_id = created["id"]
-        print(f"[INFO] Created project '{project_name}' ({project_id}) in '{org['id']}'.")
+        found_id = created["id"]
+        print(f"[INFO] Created project '{project_name}' ({found_id}) in '{org['id']}'.")
 
-    key = client.trpc(
-        "projectApiKeys.create",
-        {"projectId": project_id, "note": "claude code tracing (langfuse plugin)"},
-    )
+    key = client.trpc("projectApiKeys.create", {"projectId": found_id, "note": note})
     write_env_keys(
         env_file,
-        {
-            "LANGFUSE_TRACE_PUBLIC_KEY": key["publicKey"],
-            "LANGFUSE_TRACE_SECRET_KEY": key["secretKey"],
-        },
+        {public_var: key["publicKey"], secret_var: key["secretKey"]},
+        heading,
     )
     print(f"[INFO] Wrote a new key pair to {env_file} (public {key['publicKey']}).")
-    # The plugin never reads this file: its credentials live in machine-scope
-    # config. Print what to paste so the pair does not have to be dug out.
-    print("[INFO] Configure the plugin with this pair (stored outside any repo --")
-    print("[INFO] the secret goes to the OS keychain, not to a file):")
-    print("[INFO]")
-    print("[INFO]   claude plugin install langfuse-observability@langfuse-observability \\")
-    print(f"[INFO]     --config LANGFUSE_PUBLIC_KEY={key['publicKey']} \\")
-    print(f"[INFO]     --config LANGFUSE_SECRET_KEY={key['secretKey']} \\")
-    print(f"[INFO]     --config LANGFUSE_BASE_URL={base}")
-    print("[INFO]")
     print("[INFO] Any previous key pair still exists in Langfuse; revoke it in the UI")
     print("[INFO] under Settings -> API Keys if you no longer want it valid.")
     return 0
