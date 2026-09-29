@@ -40,6 +40,19 @@ and Node.js 22+ with `npm` for Codex. `make trace/check` verifies them.
 brew install uv        # or: curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
+## Platform support
+
+- **macOS and Linux** are supported. CI runs the whole stack — start, backup,
+  clean, restore — on Ubuntu. On Linux, add yourself to the `docker` group
+  (`sudo usermod -aG docker $USER`, then log in again); `make docker/check` says so
+  when that is the problem.
+- **Windows** works through **WSL2** only: the Makefile needs bash, GNU make and
+  POSIX tools, so it does not run from PowerShell or cmd. Use Docker Desktop with
+  WSL integration and clone **inside** the WSL filesystem (`~/...`), not under
+  `/mnt/c` — that is slow, and `chmod 600` does not stick there, which quietly
+  weakens the protection on `.env`. The repo's `.gitattributes` keeps files LF,
+  so a checkout made with Git for Windows still runs.
+
 ## Quick start
 
 **1. Start Langfuse.**
@@ -204,7 +217,7 @@ ran, and what the turn cost. Two harnesses are supported:
 
 | Harness | Plugin | Secret stored in | Per-repo tags | Needs |
 | --- | --- | --- | --- | --- |
-| `claude` (Claude Code) | [Claude-Observability-Plugin](https://github.com/langfuse/Claude-Observability-Plugin) | OS keychain | `<repo>/.claude/settings.json` | [`uv`](https://docs.astral.sh/uv/) |
+| `claude` (Claude Code) | [Claude-Observability-Plugin](https://github.com/langfuse/Claude-Observability-Plugin) | Claude Code's credential store | `<repo>/.claude/settings.json` | [`uv`](https://docs.astral.sh/uv/) |
 | `codex` (Codex CLI) | [codex-observability-plugin](https://github.com/langfuse/codex-observability-plugin) | `~/.codex/langfuse.json`, mode `600` | `<repo>/.codex/langfuse.json` | Node.js 22+, `npm`, Codex 0.143+ |
 
 Pick them with `TRACE_HARNESSES` (default `claude`):
@@ -229,9 +242,10 @@ The commands are in [Quick start](#quick-start). What they do not explain:
 without touching the others.
 
 **Credentials never enter a repo.** They live in each plugin's machine-scope
-config, so a configured harness traces every repo. Claude Code puts the secret in
-the OS keychain and only the public key and base URL land in
-`~/.claude/settings.json`. Codex has no keychain option, so its pair is written to
+config, so a configured harness traces every repo. Claude Code keeps the secret
+with its other credentials — the macOS Keychain, or `~/.claude/.credentials.json`
+(mode `600`) on Linux — and only the public key and base URL land in
+`~/.claude/settings.json`. Codex has no credential store, so its pair is written to
 `~/.codex/langfuse.json` with mode `600`, together with `user_id` set to your
 Langfuse account's email — otherwise the plugin reports your Codex login email.
 
