@@ -20,10 +20,10 @@ It clones the upstream repo, generates an env file with random secrets, brings
 the stack up, and waits until it is actually serving. Optionally it provisions
 your org, project, user, and API keys so there are no manual UI steps at all.
 
-It can also trace **Claude Code itself** into Langfuse — one trace per turn
-carrying the prompt, the reply, every tool call, the cost, and a tag per skill
-invoked — which is useful for tuning skills. See
-[Tracing Claude Code](#tracing-claude-code).
+It can also trace **coding agents** into Langfuse — Claude Code and Codex, one
+trace per turn carrying the prompt, the reply, every tool call, the cost, and a
+tag per skill invoked — which is useful for tuning skills. See
+[Tracing coding agents](#tracing-coding-agents).
 
 ## Requirements
 
@@ -31,9 +31,10 @@ To run Langfuse: `git`, `openssl`, `curl`, and Docker with the Compose plugin.
 `make langfuse/check` verifies the host tools; `make docker/check` verifies the
 daemon.
 
-To trace Claude Code as well, `python3` 3.10+ (for the helpers in
-[`scripts/`](scripts)) and [`uv`](https://docs.astral.sh/uv/) — **without `uv`
-tracing fails silently** (see [Setup](#setup)). `make trace/check` verifies both.
+To trace coding agents as well, `python3` 3.10+ (for the helpers in
+[`scripts/`](scripts)) plus each harness's own needs: [`uv`](https://docs.astral.sh/uv/)
+for Claude Code — **without it tracing fails silently** (see [Setup](#setup)) —
+and Node.js 22+ with `npm` for Codex. `make trace/check` verifies them.
 
 ```bash
 brew install uv        # or: curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -59,7 +60,8 @@ instead — but decide now, since changing your mind later means `make clean`,
 which destroys your volumes. See [Headless provisioning](#headless-provisioning).
 
 `TRACE=true` also creates the tracing project and installs and configures the
-Langfuse plugin. It is needed only once; see [Setup](#setup).
+Langfuse plugin for each harness in `TRACE_HARNESSES` (default `claude`; add
+`codex` for Codex). It is needed only once; see [Setup](#setup).
 
 **2. Label each repo you want to tell apart** (tracing only).
 
@@ -67,9 +69,9 @@ Langfuse plugin. It is needed only once; see [Setup](#setup).
 make trace/tag ~/Code/my-existing-repo
 ```
 
-**3. Restart Claude Code in that repo.** Hooks and environment are read at session
-launch, so a session already running is never traced. This is the one step nothing
-can automate.
+**3. Restart the agent in that repo.** Hooks and environment are read at session
+launch, so a session already running is never traced. For Codex, also trust the
+Langfuse hook in `/hooks` on first run. These are the steps nothing can automate.
 
 ## Daily use
 
@@ -128,7 +130,7 @@ every trace row, and dashboards, retention, and API keys are all per project. So
 project boundary is a permanent analysis boundary: two applications sharing one
 project means interleaved traces you cannot practically separate later.
 
-Do **not** split by environment or, for Claude Code, by repo — see
+Do **not** split by environment or, for coding agents, by repo — see
 [One project for every repo](#one-project-for-every-repo).
 
 ### Adding a project
@@ -194,25 +196,55 @@ In events-only mode the public `GET /api/public/traces` endpoint is also
 disabled, so read traces in the UI. They take a few seconds to appear because the
 worker batches writes.
 
-## Tracing Claude Code
+## Tracing coding agents
 
-Claude Code sessions can be traced into Langfuse, which is useful for tuning
+Coding agent sessions can be traced into Langfuse, which is useful for tuning
 skills: you see the prompt a skill received, what it produced, which tools it
-ran, and what the turn cost.
+ran, and what the turn cost. Two harnesses are supported:
 
-This uses the official
-[Langfuse plugin](https://github.com/langfuse/Claude-Observability-Plugin). It
-reads Claude Code's transcript and emits **one trace per turn** with the
-conversation on it. That matters: Claude Code's own OTLP trace export cannot carry
-a conversation at all — the prompt is redacted unless a flag is set, and the
-assistant's reply is emitted as an OTel *log* record, which Langfuse does not
-ingest. The transcript has both sides, so the plugin does.
+| Harness | Plugin | Secret stored in | Per-repo tags | Needs |
+| --- | --- | --- | --- | --- |
+| `claude` (Claude Code) | [Claude-Observability-Plugin](https://github.com/langfuse/Claude-Observability-Plugin) | OS keychain | `<repo>/.claude/settings.json` | [`uv`](https://docs.astral.sh/uv/) |
+| `codex` (Codex CLI) | [codex-observability-plugin](https://github.com/langfuse/codex-observability-plugin) | `~/.codex/langfuse.json`, mode `600` | `<repo>/.codex/langfuse.json` | Node.js 22+, `npm`, Codex 0.143+ |
+
+Pick them with `TRACE_HARNESSES` (default `claude`):
+
+```bash
+TRACE=true TRACE_HARNESSES="claude codex" make dev/up
+make trace/tag ~/Code/my-repo TRACE_HARNESSES="claude codex"
+```
+
+Both plugins read the harness's own transcript and emit **one trace per turn**
+with the conversation on it. That matters for Claude Code in particular: its own
+OTLP trace export cannot carry a conversation at all — the prompt is redacted
+unless a flag is set, and the assistant's reply is emitted as an OTel *log*
+record, which Langfuse does not ingest. The transcript has both sides.
 
 ### Setup
 
 The commands are in [Quick start](#quick-start). What they do not explain:
 
-**`uv` is required.** The plugin's hook declares its dependency
+**Each harness gets its own key pair**, `LANGFUSE_TRACE_<HARNESS>_PUBLIC_KEY` /
+`_SECRET_KEY` in `.env`, all in the one tracing project. One can be revoked
+without touching the others.
+
+**Credentials never enter a repo.** They live in each plugin's machine-scope
+config, so a configured harness traces every repo. Claude Code puts the secret in
+the OS keychain and only the public key and base URL land in
+`~/.claude/settings.json`. Codex has no keychain option, so its pair is written to
+`~/.codex/langfuse.json` with mode `600`, together with `user_id` set to your
+Langfuse account's email — otherwise the plugin reports your Codex login email.
+
+**Codex is enabled per repo.** The plugin needs `hooks = true` and the plugin
+switched on in a Codex `config.toml`. `make trace/tag` writes those two settings
+to `<repo>/.codex/config.toml` and never touches `~/.codex/config.toml`. If the
+repo already has a `config.toml` that does not enable the plugin, `trace/tag`
+refuses and prints the two lines to add, rather than rewriting a file it did not
+write. Two things only you can do: **trust the Langfuse `Stop` hook** in Codex's
+`/hooks` on first run (and again after a plugin update), and start Codex from
+the repo root — the plugin reads per-repo settings from the working directory.
+
+**Claude Code needs `uv`.** The plugin's hook declares its dependency
 (`langfuse>=4.7,<5`) as PEP 723 inline metadata, and `hooks.json` runs it with
 `uv run --script` when `uv` is on PATH and plain `python3` otherwise. Without
 `uv` the dependency is not installed, the import fails, and **tracing silently
@@ -221,35 +253,32 @@ stops** — the hook logs and exits 0 by design, so nothing surfaces.
 **`make trace/project` needs `LANGFUSE_INIT_USER_EMAIL` and `_PASSWORD` in
 `.env`** to log in, because it drives the same routes the UI uses. Headless
 provisioning puts them there. If you signed up through the UI instead, either add
-them to `.env` or skip the target: create the project and an API key pair in the
-UI and put them in `LANGFUSE_TRACE_PUBLIC_KEY` / `_SECRET_KEY` yourself. The
-target says as much if they are missing.
-
-**Credentials never enter a repo.** They live in the plugin's own machine-scope
-config, so tracing is on for every repo. Claude Code puts the secret in the OS
-keychain; only the public key and base URL land in `~/.claude/settings.json`.
+them to `.env` or skip the target: create the project and an API key pair per
+harness in the UI and set `LANGFUSE_TRACE_<HARNESS>_*` yourself.
 
 **`TRACE=true` is needed once.** The tracing steps in `dev/up` are conditional,
-so a plain `make dev/up` does nothing unasked:
+so a plain `make dev/up` does nothing unasked. For each harness:
 
 | Step | Skipped when |
 | --- | --- |
-| `trace/project` | nothing indicates tracing is wanted: `TRACE` is not `true`, no `LANGFUSE_TRACE_*` in `.env`, **and** the plugin is not installed |
-| `trace/install` | no key pair, **or** the installed plugin already carries the current one |
+| `trace/project` | nothing indicates tracing is wanted: `TRACE` is not `true`, no key pair in `.env`, **and** the plugin is not configured |
+| `trace/install` | no key pair, **or** the plugin already carries the current one |
 
-After the first run, the key pair in `.env` and the installed plugin both signal
+After the first run, the key pair in `.env` and the configured plugin both signal
 that tracing is wanted. The plugin signal is what makes `make clean` (which
 deletes `.env`) recoverable: a cold `make dev/up` sees the plugin, provisions the
 project, issues a key pair, notices the plugin's stored key no longer matches,
 and reconfigures it. Without it the rebuild would skip tracing while the plugin
-kept its dead key — and since Langfuse swallows the resulting 401s, tracing would
-break with no visible error.
+kept its dead key — and since the plugins swallow the resulting 401s, tracing
+would break with no visible error.
 
-`trace/install` warns rather than fails when the `claude` CLI is absent, so
+`trace/install` warns rather than fails when a harness's CLI is absent, so
 `dev/up` still works in CI or a container. Run it alone (`make trace/install`)
-after rotating keys.
+after rotating keys. Restart running sessions afterwards; hooks load at launch.
 
 ### What lands automatically
+
+What each plugin records differs in detail; Claude Code's is:
 
 | | How |
 | --- | --- |
@@ -262,17 +291,19 @@ after rotating keys.
 | Repo and branch | `cwd`, `project` and `git_branch` trace metadata |
 
 Skill tags catch both trails — a `Skill` tool call and a `/slash` invocation, which
-leaves no tool call at all — so tuning a skill can be filtered by its tag.
+leaves no tool call at all — so tuning a skill can be filtered by its tag. The
+Codex plugin also traces turns, model calls, tool calls, token usage, subagent
+threads and `skill:<name>` tags.
 
 ### One project for every repo
 
-All repos share one Langfuse project. Langfuse documents separate projects for
-**access control** only; a project is also a hard boundary, since keys are bound to
-one project and analytical queries are project-scoped. Splitting by repo would make
-"how does this skill behave across my repos" unanswerable, which is usually the
-reason to trace skills at all.
+All repos and harnesses share one Langfuse project. Langfuse documents separate
+projects for **access control** only; a project is also a hard boundary, since
+keys are bound to one project and analytical queries are project-scoped.
+Splitting by repo or harness would make "how does this skill behave across my
+repos" unanswerable, which is usually the reason to trace skills at all.
 
-Repos are told apart by a tag:
+Repos and harnesses are told apart by tags:
 
 ```bash
 make trace/tag ~/Code/my-repo                       # tag defaults to the dir name
@@ -280,45 +311,72 @@ make trace/tag ~/Code/svc REPO_LABEL=billing-api
 make trace/untag ~/Code/my-repo
 ```
 
-That writes one variable to the repo's `.claude/settings.json`:
+For Claude Code that writes one variable to the repo's `.claude/settings.json`:
 
 ```json
-{ "env": { "CC_LANGFUSE_TRACE_TAGS": "repo:my-repo" } }
+{ "env": { "CC_LANGFUSE_TRACE_TAGS": "repo:my-repo,harness:claude" } }
 ```
 
-It holds no secret, so committing it is safe and the label travels with the clone.
-`cwd`/`project`/`git_branch` metadata is added by the plugin regardless, so an
-untagged repo is still identifiable — the tag just gives you a filter facet
-alongside `skill:*`. Both targets are idempotent, preserve sibling tags and other
-settings keys, and refuse a file that is not valid JSON.
+For Codex it writes `{"tags": ["repo:my-repo", "harness:codex"]}` to
+`.codex/langfuse.json`, next to the `config.toml` described in [Setup](#setup).
+None of these hold a secret, so committing them is safe and the label travels
+with the clone. `cwd`/`project`/`git_branch` metadata is added by the Claude
+plugin regardless, so an untagged repo is still identifiable — the tags just give
+you filter facets alongside `skill:*`. Both targets are idempotent, preserve
+sibling tags and other settings keys, and refuse a file they cannot parse.
 
-The same reasoning applies to environments, for Claude Code and applications
+The same reasoning applies to environments, for coding agents and applications
 alike: use one project and set `LANGFUSE_TRACING_ENVIRONMENT` (`development` /
 `staging` / `production`), which the Langfuse SDK reads itself — in your app's
 environment, or in the plugin config for Claude Code, since the plugin does not
-set Langfuse's `environment` field itself. A project per environment fragments dashboards and multiplies key
-management for no benefit. Likewise a monorepo usually wants one project with
+set Langfuse's `environment` field itself (Codex has an `environment` option in
+`langfuse.json`). A project per environment fragments dashboards and multiplies
+key management for no benefit. Likewise a monorepo usually wants one project with
 per-service spans, unless the services are genuinely owned separately.
+
+### Plugin and proxy together
+
+A harness can also send its model calls through a
+[LiteLLM](https://docs.litellm.ai) proxy (the companion `litellm-helper` sets one
+up), whose Langfuse callback logs **one trace per model call** — the routing decision, the upstream
+model that served it, latency and cost. That works alongside the plugin, not
+instead of it: the plugin reads the transcript on your machine, so it traces a
+turn the same way whichever endpoint served it.
+
+Keep the two in **separate projects**. In one project every model call would be
+counted twice — once on the plugin's turn trace, once on the proxy's call trace
+— and cost and token dashboards would roughly double. They also answer different
+questions: what the agent did, versus how the request was routed and what it cost.
+
+The two share a tag vocabulary so the same filter works in both projects:
+`litellm-helper` sends `repo:<label>` and `harness:<name>` on proxied requests
+(an `x-litellm-tags` header), with the same directory-name default for the label.
+
+Two limits. Through a proxy the model name the harness sees is a model-group name
+such as `smart-router`, so **cost on the plugin's traces may be missing or
+wrong** — treat the proxy's project as the source of truth for cost. And there is
+no link from a turn to its model calls yet: that needs the harness to send its
+session ID on every request, which neither does today.
 
 ### Tracing caveats
 
-**Delivery is at-most-once.** The hook persists its transcript offset *before*
-flushing to Langfuse, caps the flush at 5s, and never retries — an acknowledged
-limitation in its source. If Langfuse is down or slow when a turn ends, that turn
-is lost silently and is not backfilled. Auth failures are swallowed too, so a stale
-key looks identical to success.
+**Delivery is at-most-once.** The Claude Code hook persists its transcript offset
+*before* flushing to Langfuse, caps the flush at 5s, and never retries — an
+acknowledged limitation in its source. If Langfuse is down or slow when a turn
+ends, that turn is lost silently and is not backfilled. Both plugins swallow
+errors by default, so a stale key looks identical to success.
 
 **Tags are immutable.** Langfuse cannot add or edit tags after ingestion, so a
 tagging scheme decided later applies only to new traces.
 
-**Payloads are truncated** at 20000 characters (`CC_LANGFUSE_MAX_CHARS`),
-head-first, with a sha256 of the original retained so a truncated value stays
-identifiable.
+**Payloads are truncated** by the Claude Code plugin at 20000 characters
+(`CC_LANGFUSE_MAX_CHARS`), head-first, with a sha256 of the original retained so a
+truncated value stays identifiable.
 
 **This sends conversation content.** Prompts, replies, thinking blocks and tool
-bodies — including file contents from `Read`/`Edit` — all go to Langfuse. That is
-the point of it, but it is a larger surface than infrastructure telemetry, so decide
-deliberately before pointing it at anything shared.
+bodies — including file contents from reads and edits — all go to Langfuse. That
+is the point of it, but it is a larger surface than infrastructure telemetry, so
+decide deliberately before pointing it at anything shared.
 
 ## Backup and restore
 
@@ -370,11 +428,13 @@ Override on the command line, e.g. `SERVICE=langfuse-worker make docker/logs`.
 | `HEADLESS` | `true` | `false` writes no provisioning block; sign up in the UI |
 | `HEADLESS_EMAIL` | `git config user.email` | Account the provisioning block creates |
 | `HEADLESS_PROJECT_ID` | `claude-code-skills` | Provisioned project's permanent ID |
-| `TRACE` | `false` | `true` makes `dev/up` set up Claude Code tracing on a first run |
-| `TRACE_PROJECT_NAME` | `Claude Code Skills` | Project `trace/project` finds or creates; read from `.env` when set there |
+| `HEADLESS_PROJECT_NAME` | `Coding Agents` | Provisioned project's display name; changeable later |
+| `TRACE` | `false` | `true` makes `dev/up` set up tracing on a first run |
+| `TRACE_HARNESSES` | `claude` | Harnesses the `trace/*` targets act on: `claude`, `codex` |
+| `TRACE_PROJECT_NAME` | `HEADLESS_PROJECT_NAME` | Project `trace/project` finds (by ID first) or creates; `LANGFUSE_TRACE_PROJECT_NAME` in `.env` overrides |
 | `REPO_DIR` | *(this repo)* | Repo `trace/tag` acts on; also settable as a bare path argument |
 | `REPO_LABEL` | *(dir name)* | Value written as the `repo:<label>` tag |
-| `REPO_SETTINGS_FILE` | `<repo>/.claude/settings.json` | Settings file to write; point at `settings.local.json` to keep it personal |
+| `CLAUDE_SETTINGS_FILE` | `<repo>/.claude/settings.json` | Claude Code settings file to tag; point at `settings.local.json` to keep it personal |
 
 `LANGFUSE_VERSION` pins the **compose file**, not the images — upstream pins
 `langfuse:4`, a floating major tag, so the running app version can be newer than
@@ -393,8 +453,8 @@ loopback.
 | `.env.example` | yes | Reference for every variable; placeholders only |
 | `.env` | **no** | Generated, mode `600`, holds live secrets |
 | `docker-compose.override.yml` | yes | Stack env vars upstream's compose does not expose |
-| `scripts/` | yes | Helpers for `trace/project` and `trace/tag` |
-| `.claude/settings.json` | yes | This repo's `repo:` trace tag; example for others |
+| `scripts/` | yes | Key minting (also used by litellm-helper) and the per-harness tracing adapters |
+| `.claude/settings.json` | yes | This repo's `repo:`/`harness:` trace tags; example for others |
 | `.claude/settings.local.json` | **no** | Personal overrides, if you use them |
 | `.langfuse/` | no | Upstream clone |
 | `backups/` | no | Dumps — contain the encryption key |
