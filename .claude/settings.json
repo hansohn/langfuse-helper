@@ -1,5 +1,5 @@
 {
   "env": {
-    "CC_LANGFUSE_TRACE_TAGS": "repo:langfuse-helper"
+    "CC_LANGFUSE_TRACE_TAGS": "repo:langfuse-helper,harness:claude"
   }
 }

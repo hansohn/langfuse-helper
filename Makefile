@@ -85,8 +85,10 @@ HEADLESS ?= true
 HEADLESS_EMAIL ?= $(shell git config user.email 2>/dev/null)
 HEADLESS_USER_NAME ?= $(shell git config user.name 2>/dev/null)
 HEADLESS_ORG_ID ?= $(REPO_NAME)
+# The ID is permanent once traces exist, so it keeps its original value; the
+# display name is only a label and says what the project now holds.
 HEADLESS_PROJECT_ID ?= claude-code-skills
-HEADLESS_PROJECT_NAME ?= Claude Code Skills
+HEADLESS_PROJECT_NAME ?= Coding Agents
 
 ## Generate env file with random secrets (headless provisioning by default)
 langfuse/env: langfuse/check
@@ -297,169 +299,113 @@ langfuse/bootstrap: docker/check
 .PHONY: langfuse/bootstrap
 
 #-------------------------------------------------------------------------------
-# claude code tracing
+# coding agent tracing
 #-------------------------------------------------------------------------------
-# Tracing is done by the official Langfuse plugin, which reads Claude Code's
-# transcript and emits one trace per turn with the conversation on it. The
-# credentials live in the plugin's machine-scope config -- never in this repo --
-# so nothing here enables tracing. These targets only:
+# Tracing is done by each harness's official Langfuse plugin, which reads the
+# harness's transcript and emits one trace per turn with the conversation on it.
+# Credentials live in the plugin's own machine-scope config -- never in a repo.
+# These targets only:
 #
-#   trace/project  create the Langfuse project and the key pair for the wizard
-#   trace/tag      label a repo's traces so they can be told apart in the UI
+#   trace/project  create the tracing project and one key pair per harness
+#   trace/install  install and configure each harness's plugin with its pair
+#   trace/tag      label a repo's traces (for Codex, also enable the plugin there)
 #
-# Install once (see the README):
-#   brew install uv
-#   claude plugin marketplace add langfuse/Claude-Observability-Plugin
-#   claude plugin install langfuse-observability@langfuse-observability
+# The per-harness logic lives in scripts/trace_harness.py. Adding a harness is a
+# class there plus its name in TRACE_HARNESSES; nothing here changes.
 
-# Key pair for the project Claude Code traces land in. Written here by
-# trace/project and then pasted into the plugin's config; the plugin itself never
-# reads this file. One project for every repo -- Langfuse documents separate
-# projects for access control only, and splitting by repo would make "how does
-# this skill behave across my repos" unanswerable.
-TRACE_REQUIRED ?= LANGFUSE_TRACE_PUBLIC_KEY LANGFUSE_TRACE_SECRET_KEY
+# Harnesses to trace. Each gets its own key pair in .env,
+# LANGFUSE_TRACE_<HARNESS>_PUBLIC_KEY / _SECRET_KEY, so one can be revoked without
+# touching the others. All of them write to the same project: splitting by
+# harness would make "how does this skill behave across harnesses" unanswerable.
+TRACE_HARNESSES ?= claude
 
-# When true, trace/project exits quietly instead of provisioning if nothing
-# indicates tracing is wanted. 'dev/up' sets this so tracing stays opt-in -- the
-# same pattern BOOTSTRAP_OPTIONAL uses for headless provisioning.
+# When true, the trace targets exit quietly for a harness where nothing indicates
+# tracing is wanted. 'dev/up' sets this so tracing stays opt-in -- the same
+# pattern BOOTSTRAP_OPTIONAL uses for headless provisioning.
 TRACE_OPTIONAL ?= false
 
-# True when anything indicates tracing is wanted. Two signals, because 'make
-# clean' deletes the env file: a LANGFUSE_TRACE_* variable in it, OR the plugin
-# already being installed. The second is what makes 'clean' recoverable -- without
-# it a cold rebuild skips provisioning while the plugin keeps its now-dead key,
-# and Langfuse swallows the resulting 401s, so tracing breaks with no signal.
-#
-# Neither signal exists on a first run, so TRACE=true forces it:
-#   TRACE=true make dev/up
+# Forces tracing on for a first run, before a key pair or configured plugin
+# exists to signal it:  TRACE=true make dev/up
 TRACE ?= false
-TRACE_WANTED = $(shell \
-	[ "$(TRACE)" = "true" ] && { echo true; exit 0; }; \
-	[ -f "$(LANGFUSE_ENV_FILE)" ] \
-		&& grep -qE '^LANGFUSE_TRACE_[A-Z_]+=.' "$(LANGFUSE_ENV_FILE)" \
-		&& { echo true; exit 0; }; \
-	grep -q '$(TRACE_PLUGIN)' "$(HOME)/.claude/plugins/installed_plugins.json" 2>/dev/null \
-		&& echo true || echo false)
 
-# True when every required LANGFUSE_TRACE_* has a non-empty value in the env file.
-# Recursively expanded so it is evaluated per-recipe, after langfuse/env has run
-# -- mirrors LANGFUSE_INIT_CONFIGURED above.
-TRACE_CONFIGURED = $(shell \
-	[ -f "$(LANGFUSE_ENV_FILE)" ] || { echo false; exit 0; }; \
-	for var in $(TRACE_REQUIRED); do \
-		grep -qE "^$$var=." "$(LANGFUSE_ENV_FILE)" || { echo false; exit 0; }; \
-	done; \
-	echo true)
+# Value of a variable in the env file, or empty. Recursively expanded wherever it
+# is used, so it reads the file as it is after langfuse/env has run.
+env_value = $(shell [ -f "$(LANGFUSE_ENV_FILE)" ] && sed -n 's/^$(1)=//p' "$(LANGFUSE_ENV_FILE)" | tail -1)
 
-# Display name of the Langfuse project Claude Code traces land in. Reads
-# LANGFUSE_TRACE_PROJECT_NAME from the env file when set, so the name lives beside
-# the keys it belongs to. Recursively expanded so it is read after langfuse/env.
-TRACE_PROJECT_NAME_FROM_ENV = $(shell \
-	[ -f "$(LANGFUSE_ENV_FILE)" ] && \
-	sed -n 's/^LANGFUSE_TRACE_PROJECT_NAME=//p' "$(LANGFUSE_ENV_FILE)" | tail -1)
-TRACE_PROJECT_NAME = $(if $(TRACE_PROJECT_NAME_FROM_ENV),$(TRACE_PROJECT_NAME_FROM_ENV),Claude Code Skills)
+# The project traces land in. Found by ID first, so renaming its display name
+# never creates a second project; by name when there is no known ID (a stack
+# set up through the UI). LANGFUSE_TRACE_PROJECT_NAME in .env overrides the name.
+TRACE_PROJECT_ID = $(or $(call env_value,LANGFUSE_INIT_PROJECT_ID),$(HEADLESS_PROJECT_ID))
+TRACE_PROJECT_NAME = $(or $(call env_value,LANGFUSE_TRACE_PROJECT_NAME),$(HEADLESS_PROJECT_NAME))
 
-## Verify the host tools tracing needs
+# Langfuse user attached to traces where the plugin allows it (Codex), so every
+# harness reports the account's email rather than its own login identity.
+TRACE_USER_ID = $(or $(call env_value,LANGFUSE_INIT_USER_EMAIL),$(HEADLESS_EMAIL))
+
+TRACE_HARNESS = \
+	ENV_FILE="$(LANGFUSE_ENV_FILE)" \
+	LANGFUSE_URL="$(LANGFUSE_URL)" \
+	TRACE="$(TRACE)" \
+	OPTIONAL="$(TRACE_OPTIONAL)" \
+	USER_ID="$(TRACE_USER_ID)" \
+	python3 "$(PROJECT_PATH)/scripts/trace_harness.py"
+
+# Under TRACE_OPTIONAL a missing python3 means "not tracing", not an error:
+# 'dev/up' must still work for someone who never asked for tracing.
+TRACE_NEED_PYTHON = \
+	if ! command -v python3 > /dev/null 2>&1; then \
+		if [ "$(TRACE_OPTIONAL)" = "true" ]; then exit 0; fi; \
+		echo "[ERROR] python3 is not installed (needed by scripts/)."; \
+		exit 1; \
+	fi
+
+## Verify the host tools tracing needs, for every harness in TRACE_HARNESSES
 trace/check:
-	@command -v python3 > /dev/null 2>&1 || (echo "[ERROR] python3 is not installed (needed by scripts/)." && exit 1)
 	@python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' \
 		|| (echo "[ERROR] python3 3.10+ required, found $$(python3 -V 2>&1)." && exit 1)
-	@# The plugin's hook declares its langfuse dependency as PEP 723 metadata and is
-	@# run with 'uv run --script'. Without uv it falls back to bare python3, the
-	@# import fails, and the hook exits 0 -- so tracing stops with nothing to see.
-	@command -v uv > /dev/null 2>&1 || (echo "[ERROR] uv is not installed. Tracing fails silently without it: 'brew install uv'." && exit 1)
-	@echo "[INFO] python3 $$(python3 -V 2>&1 | cut -d' ' -f2) and uv $$(uv --version | cut -d' ' -f2) present."
+	@echo "[INFO] python3 $$(python3 -V 2>&1 | cut -d' ' -f2) present."
+	@set -eu; for harness in $(TRACE_HARNESSES); do \
+		$(TRACE_HARNESS) check $$harness; \
+	done
 .PHONY: trace/check
 
-## Ensure the tracing project and API keys exist (idempotent)
+## Ensure the tracing project and a key pair per harness exist (idempotent)
 trace/project: docker/check
 	@# One shell for the whole recipe so the no-op path returns immediately, as in
 	@# langfuse/bootstrap.
 	@set -eu; \
 	if [ ! -f "$(LANGFUSE_ENV_FILE)" ]; then \
-		if [ "$(TRACE_OPTIONAL)" = "true" ]; then \
-			exit 0; \
-		fi; \
+		if [ "$(TRACE_OPTIONAL)" = "true" ]; then exit 0; fi; \
 		echo "[ERROR] Env file '$(LANGFUSE_ENV_FILE)' not found. Run 'make langfuse/env'."; \
 		exit 1; \
 	fi; \
-	if [ "$(TRACE_OPTIONAL)" = "true" ] && [ "$(TRACE_WANTED)" != "true" ]; then \
-		exit 0; \
-	fi; \
-	: Tools are checked only once tracing is actually wanted. As a prerequisite \
-	: this would fail 'dev/up' for someone who never asked for tracing.; \
-	$(SELF) --no-print-directory trace/check; \
-	ENV_FILE="$(LANGFUSE_ENV_FILE)" \
-	LANGFUSE_URL="$(LANGFUSE_URL)" \
-	PROJECT_NAME="$(TRACE_PROJECT_NAME)" \
-	python3 "$(PROJECT_PATH)/scripts/langfuse_project.py"
+	$(TRACE_NEED_PYTHON); \
+	for harness in $(TRACE_HARNESSES); do \
+		if [ "$(TRACE_OPTIONAL)" = "true" ] && ! $(TRACE_HARNESS) wanted $$harness; then \
+			continue; \
+		fi; \
+		upper="$$(echo "$$harness" | tr '[:lower:]' '[:upper:]')"; \
+		ENV_FILE="$(LANGFUSE_ENV_FILE)" \
+		LANGFUSE_URL="$(LANGFUSE_URL)" \
+		PROJECT_ID="$(TRACE_PROJECT_ID)" \
+		PROJECT_NAME="$(TRACE_PROJECT_NAME)" \
+		KEY_PREFIX="LANGFUSE_TRACE_$$upper" \
+		KEY_NOTE="$$harness tracing (langfuse plugin)" \
+		HEADING="# --- $$harness tracing (written by 'make trace/project') ---" \
+		python3 "$(PROJECT_PATH)/scripts/langfuse_project.py"; \
+	done
 .PHONY: trace/project
 
-# Where the plugin's own machine-scope config comes from. These are the values
-# trace/install passes to 'claude plugin install --config'.
-TRACE_PLUGIN ?= langfuse-observability@langfuse-observability
-TRACE_MARKETPLACE ?= langfuse/Claude-Observability-Plugin
-
-# True when the plugin is installed AND its stored public key already matches the
-# pair in the env file. Recursively expanded so it is evaluated per-recipe, after
-# trace/project may have rotated the keys.
-TRACE_PLUGIN_CURRENT = $(shell \
-	[ -f "$(LANGFUSE_ENV_FILE)" ] || { echo false; exit 0; }; \
-	command -v claude > /dev/null 2>&1 || { echo false; exit 0; }; \
-	want="$$(sed -n 's/^LANGFUSE_TRACE_PUBLIC_KEY=//p' "$(LANGFUSE_ENV_FILE)" | tail -1)"; \
-	[ -n "$$want" ] || { echo false; exit 0; }; \
-	have="$$(python3 -c 'import json,os,sys; \
-d=json.load(open(os.path.expanduser("~/.claude/settings.json"))); \
-print(d.get("pluginConfigs",{}).get("$(TRACE_PLUGIN)",{}).get("options",{}).get("LANGFUSE_PUBLIC_KEY",""))' 2>/dev/null)"; \
-	[ "$$want" = "$$have" ] && echo true || echo false)
-
-## Install and configure the Langfuse plugin (idempotent, machine-scope)
+## Install and configure each harness's Langfuse plugin (idempotent, machine-scope)
 trace/install:
-	@# Machine scope: this affects every repo on this machine and puts the secret in
-	@# the OS keychain. Safe to run repeatedly -- it does nothing when the installed
-	@# plugin already carries the current key pair, which is what lets 'dev/up'
-	@# depend on it unconditionally.
+	@# Machine scope: this affects every repo on this machine. Safe to run
+	@# repeatedly -- a harness whose plugin already carries the current key pair
+	@# is left alone, which is what lets 'dev/up' depend on it unconditionally.
 	@set -eu; \
-	env_file="$(LANGFUSE_ENV_FILE)"; \
-	if [ ! -f "$$env_file" ] || [ "$(TRACE_CONFIGURED)" != "true" ]; then \
-		if [ "$(TRACE_OPTIONAL)" = "true" ]; then \
-			exit 0; \
-		fi; \
-		echo "[ERROR] No key pair in '$$env_file'. Run 'make trace/project' first."; \
-		exit 1; \
-	fi; \
-	if [ "$(TRACE_PLUGIN_CURRENT)" = "true" ]; then \
-		if [ "$(TRACE_OPTIONAL)" != "true" ]; then \
-			echo "[INFO] Plugin already installed with the current key pair. No change."; \
-		fi; \
-		exit 0; \
-	fi; \
-	if ! command -v claude > /dev/null 2>&1; then \
-		: Not an error under TRACE_OPTIONAL -- 'dev/up' must still work where the \
-		: CLI is absent, such as CI or a container.; \
-		echo "[WARN] 'claude' is not on PATH, so the plugin was not installed."; \
-		echo "[WARN] Install it yourself with:"; \
-		echo "[WARN]   claude plugin marketplace add $(TRACE_MARKETPLACE)"; \
-		echo "[WARN]   claude plugin install $(TRACE_PLUGIN) --config LANGFUSE_PUBLIC_KEY=... --config LANGFUSE_SECRET_KEY=... --config LANGFUSE_BASE_URL=$(LANGFUSE_URL)"; \
-		if [ "$(TRACE_OPTIONAL)" = "true" ]; then \
-			exit 0; \
-		fi; \
-		exit 1; \
-	fi; \
-	$(SELF) --no-print-directory trace/check; \
-	pk="$$(sed -n 's/^LANGFUSE_TRACE_PUBLIC_KEY=//p' "$$env_file" | tail -1)"; \
-	sk="$$(sed -n 's/^LANGFUSE_TRACE_SECRET_KEY=//p' "$$env_file" | tail -1)"; \
-	echo "[INFO] Installing and configuring '$(TRACE_PLUGIN)'."; \
-	claude plugin marketplace add "$(TRACE_MARKETPLACE)" > /dev/null 2>&1 || true; \
-	: The secret is on this command line, so it is briefly visible in the process \
-	: list -- the same exposure as pasting the command by hand.; \
-	claude plugin install "$(TRACE_PLUGIN)" \
-		--config "LANGFUSE_PUBLIC_KEY=$$pk" \
-		--config "LANGFUSE_SECRET_KEY=$$sk" \
-		--config "LANGFUSE_BASE_URL=$(LANGFUSE_URL)" > /dev/null 2>&1; \
-	echo "[INFO] Plugin configured. The secret is in the OS keychain, not in a file."; \
-	echo "[INFO] Tracing is on for every repo. Label one with 'make trace/tag <path>'."; \
-	echo "[INFO] Restart any running Claude Code session -- hooks load at launch."
+	$(TRACE_NEED_PYTHON); \
+	for harness in $(TRACE_HARNESSES); do \
+		$(TRACE_HARNESS) install $$harness; \
+	done
 .PHONY: trace/install
 
 # Repo to label. Accepts a bare path after the target, e.g.
@@ -490,35 +436,33 @@ endif
 
 REPO_DIR ?= $(if $(REPO_DIR_ARG),$(REPO_DIR_ARG),$(PROJECT_PATH))
 
-# Label written as CC_LANGFUSE_TRACE_TAGS=repo:<label>. Defaults to the target
-# directory's basename, which is the repo name in a normal clone.
+# Label written as repo:<label>. Defaults to the target directory's basename,
+# which is the repo name in a normal clone -- and the same default litellm-helper
+# uses for its proxy traces, so a repo carries one label in both projects.
 REPO_LABEL ?= $(notdir $(abspath $(REPO_DIR)))
 
-# Committed by default so the label travels with the clone and applies to
-# everyone who clones it. It holds no secret -- only the tag -- so committing it
-# is safe. Point at settings.local.json for a personal, uncommitted label.
-REPO_SETTINGS_FILE ?= $(abspath $(REPO_DIR))/.claude/settings.json
+# Claude Code only. Committed by default so the label travels with the clone; it
+# holds no secret. Point at settings.local.json for a personal, uncommitted label.
+CLAUDE_SETTINGS_FILE ?=
 
-## Label a repo's traces with repo:<name> (idempotent)
+## Label a repo's traces with repo:<name> and harness:<name> (idempotent)
 trace/tag:
-	@set -eu; \
-	if [ ! -d "$(abspath $(REPO_DIR))" ]; then \
-		echo "[ERROR] '$(abspath $(REPO_DIR))' does not exist."; \
-		exit 1; \
-	fi; \
-	SETTINGS_FILE="$(REPO_SETTINGS_FILE)" \
-	ATTR_VALUE="$(REPO_LABEL)" \
-	python3 "$(PROJECT_PATH)/scripts/claude_settings.py"
-	@echo "[INFO] Traces from '$(REPO_LABEL)' will carry the tag repo:$(REPO_LABEL)."
+	@set -eu; for harness in $(TRACE_HARNESSES); do \
+		REPO_DIR="$(abspath $(REPO_DIR))" \
+		REPO_LABEL="$(REPO_LABEL)" \
+		CLAUDE_SETTINGS_FILE="$(CLAUDE_SETTINGS_FILE)" \
+		$(TRACE_HARNESS) tag $$harness; \
+	done
 	@echo "[INFO] Skill tags (skill:<name>) and cwd/git_branch metadata are automatic."
 .PHONY: trace/tag
 
-## Remove the repo:<name> tag from a repo
+## Remove the repo:/harness: tags (and Codex's per-repo enable file) from a repo
 trace/untag:
-	@set -eu; \
-	SETTINGS_FILE="$(REPO_SETTINGS_FILE)" \
-	MODE=disable \
-	python3 "$(PROJECT_PATH)/scripts/claude_settings.py"
+	@set -eu; for harness in $(TRACE_HARNESSES); do \
+		REPO_DIR="$(abspath $(REPO_DIR))" \
+		CLAUDE_SETTINGS_FILE="$(CLAUDE_SETTINGS_FILE)" \
+		$(TRACE_HARNESS) untag $$harness; \
+	done
 .PHONY: trace/untag
 
 # Let a bare directory path be passed after the target. Only paths that already

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Idempotently add or remove a repo tag in a repo's Claude Code settings file.
 
-Driven by 'make trace/tag' and 'make trace/untag'. Inputs come from the
-environment so the Makefile never has to quote anything onto a command line:
+Used by scripts/trace_harness.py (the Claude Code adapter behind 'make trace/tag'
+and 'make trace/untag') through apply(). Also runnable on its own, with inputs
+from the environment so nothing is quoted onto a command line:
 
   SETTINGS_FILE  path to .claude/settings.json (created if absent)
   MODE           'enable' (default) or 'disable'
@@ -128,17 +129,20 @@ def drop_tag(env, prefix):
     return tags
 
 
-def main():
-    path = Path(require("SETTINGS_FILE"))
-    mode = os.environ.get("MODE") or "enable"
-    attr_key = os.environ.get("ATTR_KEY") or "repo"
+def apply(path, mode, tags):
+    """Set (mode 'enable') or remove (mode 'disable') one tag per prefix in `tags`.
 
+    enable:  tags is {prefix: value}, e.g. {"repo": "my-repo", "harness": "claude"}
+    disable: tags is an iterable of prefixes, e.g. ["repo", "harness"]
+
+    Returns (changed, messages). Exits non-zero on unusable input or content.
+    """
+    path = Path(path)
     if mode not in ("enable", "disable"):
         sys.exit(f"[ERROR] MODE must be 'enable' or 'disable', got '{mode}'.")
 
     if mode == "disable" and not path.exists():
-        print(f"[INFO] {path} does not exist, nothing to disable.")
-        return 0
+        return False, [f"{path} does not exist, nothing to disable."]
 
     data, existed = load(path)
 
@@ -150,33 +154,36 @@ def main():
     messages = []
 
     if mode == "disable":
-        # Remove our tag but keep any siblings. Note this cannot tell a tag we
+        # Remove our tags but keep any siblings. Note this cannot tell a tag we
         # wrote from one the project set itself under the same prefix.
-        siblings = drop_tag(env, attr_key)
-        if TAGS_VAR not in env and not siblings:
-            messages.append(f"removed the {attr_key}: tag")
-        else:
-            messages.append(f"removed the {attr_key}: tag, kept: {', '.join(siblings)}")
+        for prefix in tags:
+            siblings = drop_tag(env, prefix)
+        messages.append(f"removed the {', '.join(p + ':' for p in tags)} tag(s)")
+        if TAGS_VAR in env:
+            messages.append(f"kept: {', '.join(siblings)}")
     else:
-        attr_value = require("ATTR_VALUE")
-        # A tag is one item in a comma-separated list, so a ',' would silently
-        # inject a second tag. Langfuse also drops any tag over 200 characters.
-        if "," in attr_value:
-            sys.exit(f"[ERROR] Label may not contain ',': '{attr_value}'")
-        if len(f"{attr_key}:{attr_value}") > 200:
-            sys.exit(f"[ERROR] Tag '{attr_key}:{attr_value}' exceeds 200 characters.")
+        for prefix, value in tags.items():
+            # A tag is one item in a comma-separated list, so a ',' would silently
+            # inject a second tag. Langfuse also drops any tag over 200 characters.
+            if "," in value:
+                sys.exit(f"[ERROR] Label may not contain ',': '{value}'")
+            if len(f"{prefix}:{value}") > 200:
+                sys.exit(f"[ERROR] Tag '{prefix}:{value}' exceeds 200 characters.")
 
         legacy = [k for k in LEGACY_COLLECTOR_VARS if k in env]
         for key in legacy:
             env.pop(key)
 
-        previous, siblings = set_tag(env, attr_key, attr_value)
-        if previous is None:
-            messages.append(f"added tag {attr_key}:{attr_value}")
-        elif previous != f"{attr_key}:{attr_value}":
-            messages.append(f"tag: '{previous}' -> '{attr_key}:{attr_value}'")
+        for prefix, value in tags.items():
+            previous, _ = set_tag(env, prefix, value)
+            if previous is None:
+                messages.append(f"added tag {prefix}:{value}")
+            elif previous != f"{prefix}:{value}":
+                messages.append(f"tag: '{previous}' -> '{prefix}:{value}'")
         if legacy:
             messages.append(f"pruned {len(legacy)} obsolete collector variable(s)")
+        ours = {f"{p}:{v}" for p, v in tags.items()}
+        siblings = [t for t in parse_tags(env.get(TAGS_VAR, "")) if t not in ours]
         if siblings:
             messages.append(f"preserved other tags: {', '.join(siblings)}")
 
@@ -188,15 +195,20 @@ def main():
 
     if json.dumps(data, sort_keys=True) == before:
         state = "enabled" if mode == "enable" else "disabled"
-        print(f"[INFO] {path}: already {state}, no change.")
-        return 0
+        return False, [f"{path}: already {state}, no change."]
 
     path.parent.mkdir(parents=True, exist_ok=True)
     write_atomic(path, json.dumps(data, indent=2) + "\n")
+    return True, [f"{'Created' if not existed else 'Updated'} {path}"] + [f"  {m}" for m in messages]
 
-    print(f"[INFO] {'Created' if not existed else 'Updated'} {path}")
+
+def main():
+    mode = os.environ.get("MODE") or "enable"
+    attr_key = os.environ.get("ATTR_KEY") or "repo"
+    tags = {attr_key: require("ATTR_VALUE")} if mode == "enable" else [attr_key]
+    _, messages = apply(require("SETTINGS_FILE"), mode, tags)
     for message in messages:
-        print(f"[INFO]   {message}")
+        print(f"[INFO] {message}")
     return 0
 
 
