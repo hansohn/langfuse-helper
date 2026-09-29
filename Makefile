@@ -517,7 +517,17 @@ endif
 
 ## Verify the Docker daemon is running and the compose file exists
 docker/check:
-	@docker info > /dev/null 2>&1 || (echo "[ERROR] Docker daemon is not running." && exit 1)
+	@# On Linux the usual failure is not a stopped daemon but a user outside the
+	@# 'docker' group, so tell the two apart rather than sending them to restart it.
+	@if ! out="$$(docker info 2>&1)"; then \
+		case "$$out" in \
+			*"permission denied"*) \
+				echo "[ERROR] No permission to use the Docker daemon. Add yourself to the 'docker'"; \
+				echo "[ERROR] group (sudo usermod -aG docker \$$USER), then log out and back in." ;; \
+			*) echo "[ERROR] Docker daemon is not running." ;; \
+		esac; \
+		exit 1; \
+	fi
 	@docker compose version > /dev/null 2>&1 || (echo "[ERROR] docker compose plugin is not installed." && exit 1)
 	@if [ ! -f "$(DOCKER_COMPOSE_FILE)" ]; then \
 		echo "[ERROR] Compose file '$(DOCKER_COMPOSE_FILE)' not found. Run 'make langfuse/clone'." && exit 1; \
