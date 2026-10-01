@@ -28,13 +28,13 @@ tag per skill invoked — which is useful for tuning skills. See
 ## Requirements
 
 To run Langfuse: `git`, `openssl`, `curl`, and Docker with the Compose plugin.
-`make langfuse/check` verifies the host tools; `make docker/check` verifies the
-daemon.
+`make check` verifies the host tools and the Docker daemon.
 
 To trace coding agents as well, `python3` 3.10+ (for the helpers in
 [`scripts/`](scripts)) plus each harness's own needs: [`uv`](https://docs.astral.sh/uv/)
 for Claude Code — **without it tracing fails silently** (see [Setup](#setup)) —
-and Node.js 22+ with `npm` for Codex. `make trace/check` verifies them.
+and Node.js 22+ with `npm` for Codex. `make check` verifies them once tracing is
+set up; `TRACE=true make check` includes them before that.
 
 ```bash
 brew install uv        # or: curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -44,7 +44,7 @@ brew install uv        # or: curl -LsSf https://astral.sh/uv/install.sh | sh
 
 - **macOS and Linux** are supported. CI runs the whole stack — start, backup,
   clean, restore — on Ubuntu. On Linux, add yourself to the `docker` group
-  (`sudo usermod -aG docker $USER`, then log in again); `make docker/check` says so
+  (`sudo usermod -aG docker $USER`, then log in again); `make check` says so
   when that is the problem.
 - **Windows** works through **WSL2** only: the Makefile needs bash, GNU make and
   POSIX tools, so it does not run from PowerShell or cmd. Use Docker Desktop with
@@ -264,11 +264,12 @@ the repo root — the plugin reads per-repo settings from the working directory.
 `uv` the dependency is not installed, the import fails, and **tracing silently
 stops** — the hook logs and exits 0 by design, so nothing surfaces.
 
-**`make trace/project` needs `LANGFUSE_INIT_USER_EMAIL` and `_PASSWORD` in
-`.env`** to log in, because it drives the same routes the UI uses. Headless
-provisioning puts them there. If you signed up through the UI instead, either add
-them to `.env` or skip the target: create the project and an API key pair per
-harness in the UI and set `LANGFUSE_TRACE_<HARNESS>_*` yourself.
+**`make trace/install` needs `LANGFUSE_INIT_USER_EMAIL` and `_PASSWORD` in
+`.env`** to create the keys: it logs in and drives the same routes the UI uses.
+Headless provisioning puts them there. If you signed up through the UI instead,
+either add them to `.env`, or create the project and an API key pair per harness
+in the UI and set `LANGFUSE_TRACE_<HARNESS>_*` yourself — `trace/install` then
+finds working keys and only configures the plugins.
 
 **`TRACE=true` is needed once.** The tracing steps in `dev/up` are conditional,
 so a plain `make dev/up` does nothing unasked. For each harness:
@@ -485,7 +486,8 @@ the Helm chart for production. Observability data grows quickly, so watch disk.
 Multimodal tracing needs extra blob-storage configuration because the bundled
 MinIO is not reachable outside the Docker network for direct uploads.
 
-`make trace/project` drives Langfuse's internal tRPC routes, because the REST
+Creating the tracing keys (`make trace/install`) drives Langfuse's internal tRPC
+routes, because the REST
 equivalent (`POST /api/public/projects`) needs the `admin-api` entitlement, which
 belongs to `self-hosted:enterprise` — an unlicensed deployment reports plan `oss`
 and gets 403. The tRPC routes carry no stability guarantee: an upstream change
