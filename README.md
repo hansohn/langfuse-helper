@@ -357,9 +357,9 @@ per-service spans, unless the services are genuinely owned separately.
 ### Plugin and proxy together
 
 A harness can also send its model calls through a
-[LiteLLM](https://docs.litellm.ai) proxy (the companion `litellm-helper` sets one
-up), whose Langfuse callback logs **one trace per model call** — the routing decision, the upstream
-model that served it, latency and cost. That works alongside the plugin, not
+[LiteLLM](https://docs.litellm.ai) proxy, whose Langfuse callback logs **one trace
+per model call** — latency, cost and, for some kinds of request, the upstream
+model that served it. That works alongside the plugin, not
 instead of it: the plugin reads the transcript on your machine, so it traces a
 turn the same way whichever endpoint served it.
 
@@ -368,15 +368,24 @@ counted twice — once on the plugin's turn trace, once on the proxy's call trac
 — and cost and token dashboards would roughly double. They also answer different
 questions: what the agent did, versus how the request was routed and what it cost.
 
-The two share a tag vocabulary so the same filter works in both projects:
-`litellm-helper` sends `repo:<label>` and `harness:<name>` on proxied requests
-(an `x-litellm-tags` header), with the same directory-name default for the label.
+Give them a shared tag vocabulary so one filter works in both projects: send
+`repo:<label>` and `harness:<name>` on proxied requests, using the directory name
+as the label as `trace/tag` does. LiteLLM reads them from an `x-litellm-tags`
+header — for Claude Code, set `ANTHROPIC_CUSTOM_HEADERS` to
+`x-litellm-tags: repo:<label>,harness:claude`. `scripts/langfuse_project.py` can
+also mint the proxy's key pair, so both projects are provisioned the same way.
 
-Two limits. Through a proxy the model name the harness sees is a model-group name
-such as `smart-router`, so **cost on the plugin's traces may be missing or
-wrong** — treat the proxy's project as the source of truth for cost. And there is
-no link from a turn to its model calls yet: that needs the harness to send its
-session ID on every request, which neither does today.
+Limits, as observed with Claude Code through a local LiteLLM proxy (2026-10-01):
+
+- **The plugin records the model name the harness asked for** — a model-group
+  name such as `smart-router`, not the model that served it — so **cost on the
+  plugin's traces may be missing or wrong** for groups without a price.
+- **The proxy's trace may not record the model either.** LiteLLM left Model blank
+  on Claude Code's streamed requests, and its output-token count was lower than
+  the plugin's for the same turn (11 versus 45). Input tokens matched.
+- **There is no link from a turn to its model calls.** Match them by tags and
+  time; a real link needs the harness to send its session ID on every request,
+  which neither does today.
 
 ### Tracing caveats
 
@@ -473,7 +482,7 @@ loopback.
 | `.env.example` | yes | Reference for every variable; placeholders only |
 | `.env` | **no** | Generated, mode `600`, holds live secrets |
 | `docker-compose.override.yml` | yes | Stack env vars upstream's compose does not expose |
-| `scripts/` | yes | Key minting (also used by litellm-helper) and the per-harness tracing adapters |
+| `scripts/` | yes | Key minting (reusable by other tools, such as a LiteLLM setup) and the per-harness tracing adapters |
 | `.claude/settings.json` | yes | This repo's `repo:`/`harness:` trace tags; example for others |
 | `.claude/settings.local.json` | **no** | Personal overrides, if you use them |
 | `.langfuse/` | no | Upstream clone |
