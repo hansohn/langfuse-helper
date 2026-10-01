@@ -44,12 +44,12 @@ help:
 	@printf "Available targets:\n\n"
 	@$(SELF) -s help/generate | grep -E "\w($(HELP_FILTER))"
 
-## Display help for all targets
+# Display help for all targets
 help/all:
 	@printf "Available targets:\n\n"
 	@$(SELF) -s help/generate
 
-## This help short screen
+# This help short screen
 help/short:
 	@printf "Available targets:\n\n"
 	@$(SELF) -s help/generate MAKEFILE_LIST="Makefile Makefile.helpers"

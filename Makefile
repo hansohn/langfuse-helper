@@ -50,14 +50,35 @@ LANGFUSE_CLICKHOUSE_DB ?= default
 # whenever those change (bootstrap provisioning, restored ENCRYPTION_KEY).
 LANGFUSE_APP_SERVICES ?= langfuse-web langfuse-worker
 
-## Verify required host dependencies are installed
+# Verify required host dependencies are installed
 langfuse/check:
 	@command -v git > /dev/null 2>&1 || (echo "[ERROR] git is not installed." && exit 1)
 	@command -v openssl > /dev/null 2>&1 || (echo "[ERROR] openssl is not installed." && exit 1)
 	@command -v curl > /dev/null 2>&1 || (echo "[ERROR] curl is not installed." && exit 1)
 .PHONY: langfuse/check
 
-## Clone or update langfuse source at LANGFUSE_VERSION
+# The one pre-flight target: host tools, Docker, and -- only when tracing is set
+# up -- each harness's needs, so it never fails over tools tracing would need
+# for someone who does not trace. The three parts still run on their own as
+# prerequisites of the targets that need them.
+## Verify host tools, Docker and (when tracing) each harness's needs
+check: langfuse/check docker/daemon
+	@set -eu; \
+	wanted=false; \
+	if command -v python3 > /dev/null 2>&1; then \
+		for harness in $(TRACE_HARNESSES); do \
+			if $(TRACE_HARNESS) wanted $$harness; then wanted=true; fi; \
+		done; \
+	fi; \
+	if [ "$$wanted" = "true" ]; then \
+		$(SELF) --no-print-directory trace/check; \
+	else \
+		echo "[INFO] Tracing is not set up, so its tools were not checked ('TRACE=true make check' includes them)."; \
+	fi; \
+	echo "[INFO] Host tools and Docker are ready."
+.PHONY: check
+
+# Clone or update langfuse source at LANGFUSE_VERSION
 langfuse/clone: langfuse/check
 	@if [ -d "$(LANGFUSE_SRC_PATH)/.git" ]; then \
 		echo "[INFO] Langfuse source already present at '$(LANGFUSE_SRC_PATH)'."; \
@@ -183,7 +204,7 @@ LANGFUSE_WAIT_TIMEOUT ?= 300
 
 # Lives here rather than under docker/ because it is a Langfuse health check, not
 # generic compose plumbing: it polls the app's own /api/public/health.
-## Wait for the langfuse web service to become healthy
+# Wait for the langfuse web service to become healthy
 langfuse/wait: docker/check
 	@echo "[INFO] Waiting up to $(LANGFUSE_WAIT_TIMEOUT)s for '$(LANGFUSE_URL)'."
 	@elapsed=0; \
@@ -359,7 +380,7 @@ TRACE_NEED_PYTHON = \
 		exit 1; \
 	fi
 
-## Verify the host tools tracing needs, for every harness in TRACE_HARNESSES
+# Verify the host tools tracing needs, for every harness in TRACE_HARNESSES
 trace/check:
 	@python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' \
 		|| (echo "[ERROR] python3 3.10+ required, found $$(python3 -V 2>&1)." && exit 1)
@@ -369,7 +390,7 @@ trace/check:
 	done
 .PHONY: trace/check
 
-## Ensure the tracing project and a key pair per harness exist (idempotent)
+# Ensure the tracing project and a key pair per harness exist (idempotent)
 trace/project: docker/check
 	@# One shell for the whole recipe so the no-op path returns immediately, as in
 	@# langfuse/bootstrap.
@@ -396,8 +417,8 @@ trace/project: docker/check
 	done
 .PHONY: trace/project
 
-## Install and configure each harness's Langfuse plugin (idempotent, machine-scope)
-trace/install:
+## Create the tracing keys and configure each harness's plugin (idempotent)
+trace/install: trace/project
 	@# Machine scope: this affects every repo on this machine. Safe to run
 	@# repeatedly -- a harness whose plugin already carries the current key pair
 	@# is left alone, which is what lets 'dev/up' depend on it unconditionally.
@@ -515,8 +536,9 @@ ifeq ($(FOLLOW),true)
 DOCKER_COMPOSE_LOGS_ARGS += --follow
 endif
 
-## Verify the Docker daemon is running and the compose file exists
-docker/check:
+# Verify the Docker daemon is reachable and the compose plugin is installed.
+# Split from docker/check so 'make check' works before anything is cloned.
+docker/daemon:
 	@# On Linux the usual failure is not a stopped daemon but a user outside the
 	@# 'docker' group, so tell the two apart rather than sending them to restart it.
 	@if ! out="$$(docker info 2>&1)"; then \
@@ -529,12 +551,16 @@ docker/check:
 		exit 1; \
 	fi
 	@docker compose version > /dev/null 2>&1 || (echo "[ERROR] docker compose plugin is not installed." && exit 1)
+.PHONY: docker/daemon
+
+# Verify Docker is usable and the upstream compose file exists
+docker/check: docker/daemon
 	@if [ ! -f "$(DOCKER_COMPOSE_FILE)" ]; then \
 		echo "[ERROR] Compose file '$(DOCKER_COMPOSE_FILE)' not found. Run 'make langfuse/clone'." && exit 1; \
 	fi
 .PHONY: docker/check
 
-## Create and start compose services, restarting any that are stopped
+# Create and start compose services, restarting any that are stopped
 docker/up: docker/check
 	@if [ ! -f "$(LANGFUSE_ENV_FILE)" ]; then \
 		echo "[ERROR] Env file '$(LANGFUSE_ENV_FILE)' not found. Run 'make langfuse/env'." && exit 1; \
@@ -545,7 +571,7 @@ docker/up: docker/check
 	@$(DOCKER_COMPOSE) up $(DOCKER_COMPOSE_UP_ARGS) $(SERVICE)
 .PHONY: docker/up
 
-## Remove compose containers and networks, preserving volumes
+# Remove compose containers and networks, preserving volumes
 docker/down: docker/check
 	@echo "[INFO] Removing '$(DOCKER_COMPOSE_PROJECT)' compose containers."
 	@$(DOCKER_COMPOSE) down --remove-orphans
@@ -816,7 +842,7 @@ langfuse/restore: docker/check
 ## Clone, configure and start Langfuse (default goal)
 dev/up: BOOTSTRAP_OPTIONAL = true
 dev/up: TRACE_OPTIONAL = true
-dev/up: langfuse/clone langfuse/env docker/up langfuse/wait langfuse/bootstrap trace/project trace/install
+dev/up: langfuse/clone langfuse/env docker/up langfuse/wait langfuse/bootstrap trace/install
 .PHONY: dev/up
 
 # Alias for symmetry with dev/up. 'compose down' acts on the whole project, so

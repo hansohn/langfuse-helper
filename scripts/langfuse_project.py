@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Idempotently ensure a Langfuse project and API key pair exist.
 
-Driven by 'make trace/project' (one pair per traced harness) and by
+Driven by 'make trace/install', via its trace/project step (one pair per traced
+harness), and by
 litellm-helper's 'make langfuse/project' (the proxy's pair), which calls this
 file rather than keeping a copy. Exists because 'make clean' regenerates SALT and
 deletes .env, which invalidates every key in the database -- and LANGFUSE_INIT_*

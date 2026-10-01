@@ -376,7 +376,7 @@ def main(argv):
         if not (public_key and secret_key):
             if truthy("OPTIONAL"):
                 return 0
-            sys.exit(f"[ERROR] {harness.name}: no key pair in '{env('ENV_FILE')}'. Run 'make trace/project' first.")
+            sys.exit(f"[ERROR] {harness.name}: no key pair in '{env('ENV_FILE')}'. Run 'make trace/install' to create one.")
         if harness.current(public_key, url):
             if not truthy("OPTIONAL"):
                 print(f"[INFO] {harness.name}: plugin already configured with the current key pair. No change.")
