@@ -145,8 +145,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
+    # The secrets context cannot appear in an 'if', but env can. Without a
+    # webhook configured the step is skipped rather than failing the run.
+    env:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
     steps:
       - name: Slack Notification
+        if: env.SLACK_WEBHOOK != ''
         uses: Gamesight/slack-workflow-status@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
