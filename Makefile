@@ -24,9 +24,10 @@ SERVICE ?=
 #-------------------------------------------------------------------------------
 
 # Upstream source. LANGFUSE_VERSION accepts any git ref (branch, tag, sha).
-# Override for pinned deployments, e.g. LANGFUSE_VERSION=v3.130.0 make dev/up
+# Pinned to a release so every clone deploys the same compose file; bump it
+# deliberately, or follow upstream with LANGFUSE_VERSION=main make dev/up.
 LANGFUSE_REPO_URL ?= https://github.com/langfuse/langfuse.git
-LANGFUSE_VERSION ?= main
+LANGFUSE_VERSION ?= v4.48.0
 LANGFUSE_SRC_PATH ?= $(PROJECT_PATH)/.langfuse
 
 # Env file lives in this repo, not in the upstream clone, so the checkout stays
@@ -141,7 +142,7 @@ langfuse/env: langfuse/check
 		"NEXTAUTH_SECRET=$$nextauth_secret" \
 		"SALT=$$salt" \
 		"ENCRYPTION_KEY=$$encryption_key" \
-		"TELEMETRY_ENABLED=true" \
+		"TELEMETRY_ENABLED=false" \
 		"" \
 		"# --- postgres ---" \
 		"POSTGRES_PASSWORD=$$postgres_password" \

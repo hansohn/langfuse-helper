@@ -440,7 +440,7 @@ Override on the command line, e.g. `SERVICE=langfuse-worker make docker/logs`.
 | `FORCE` | `false` | Skip confirmation prompts; regenerate `.env` |
 | `FOLLOW` | `true` | `false` makes `docker/logs` one-shot (for CI) |
 | `TAIL` | `100` | Log lines to show |
-| `LANGFUSE_VERSION` | `main` | Any git ref of the upstream repo |
+| `LANGFUSE_VERSION` | `v4.48.0` | Any git ref of the upstream repo; `main` follows upstream |
 | `LANGFUSE_URL` | `http://localhost:3000` | Externally reachable URL |
 | `BACKUP_DEST` | `backups/<stamp>` | Backup source/target directory |
 | `LANGFUSE_WAIT_TIMEOUT` | `300` | Seconds `langfuse/wait` waits |
