@@ -93,8 +93,13 @@ make dev/up         # start (idempotent; also the default, so plain `make` works
 make docker/ps      # what is running
 make docker/logs    # tail logs; SERVICE=langfuse-web to narrow
 make dev/down       # stop for the day, keeping all data
-make help           # every target, with its purpose
+make check          # pre-flight: host tools, Docker, and tracing tools if set up
+make help           # the user-facing targets, with their purpose
 ```
+
+`make help` lists only the targets you run by hand. The steps `dev/up` runs for
+you (`langfuse/clone`, `langfuse/wait`, `docker/up`, `trace/project`, the
+individual checks) are left out of it but still work when called by name.
 
 `dev/down` is an alias for `docker/down`. It removes containers but **preserves
 volumes**, so the next `make dev/up` picks up where you left off. All services are
