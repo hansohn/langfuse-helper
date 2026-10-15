@@ -787,7 +787,8 @@ langfuse/restore: docker/check
 	@# The EXIT trap reattaches them even if a load fails; a detach that is somehow
 	@# left behind is also undone by a clickhouse restart, since it is not PERMANENT.
 	@# Dumps of views, MVs or schema_migrations (written by older backups) are
-	@# skipped, since inserting into them fails or duplicates.
+	@# skipped, since inserting into them fails or duplicates. Empty dumps are
+	@# skipped too: clickhouse rejects an INSERT with no rows (NO_DATA_TO_INSERT).
 	@ch_password="$$(grep -E '^CLICKHOUSE_PASSWORD=' "$(LANGFUSE_ENV_FILE)" | cut -d= -f2-)"; \
 	ch() { \
 		$(DOCKER_COMPOSE) exec --no-TTY clickhouse clickhouse-client \
@@ -808,6 +809,9 @@ langfuse/restore: docker/check
 			*) echo "[INFO]   skipping '$$table' (not a data table in this stack)."; continue ;; \
 		esac; \
 		echo "[INFO]   clickhouse table '$$table'."; \
+		if [ "$$({ gunzip -c "$$dump" || true; } | head -c 1 | wc -c)" -eq 0 ]; then \
+			echo "[INFO]   skipping '$$table' (empty)."; continue; \
+		fi; \
 		gunzip -c "$$dump" | $(DOCKER_COMPOSE) exec --no-TTY clickhouse clickhouse-client \
 			--user "$(LANGFUSE_CLICKHOUSE_USER)" --password "$$ch_password" \
 			--database "$(LANGFUSE_CLICKHOUSE_DB)" \
