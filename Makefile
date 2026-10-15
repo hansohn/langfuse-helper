@@ -79,13 +79,14 @@ check: langfuse/check docker/daemon
 	echo "[INFO] Host tools and Docker are ready."
 .PHONY: check
 
-# Clone or update langfuse source at LANGFUSE_VERSION
+# Clone or update langfuse source at LANGFUSE_VERSION. The clone is blobless:
+# full history and refs, but file contents only for what gets checked out.
 langfuse/clone: langfuse/check
 	@if [ -d "$(LANGFUSE_SRC_PATH)/.git" ]; then \
 		echo "[INFO] Langfuse source already present at '$(LANGFUSE_SRC_PATH)'."; \
 	else \
 		echo "[INFO] Cloning '$(LANGFUSE_REPO_URL)' into '$(LANGFUSE_SRC_PATH)'."; \
-		git clone --quiet "$(LANGFUSE_REPO_URL)" "$(LANGFUSE_SRC_PATH)"; \
+		git clone --quiet --filter=blob:none "$(LANGFUSE_REPO_URL)" "$(LANGFUSE_SRC_PATH)"; \
 	fi
 	@echo "[INFO] Checking out langfuse '$(LANGFUSE_VERSION)'."
 	@git -C "$(LANGFUSE_SRC_PATH)" fetch --quiet --tags origin
