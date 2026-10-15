@@ -170,8 +170,8 @@ lifetimes:
 
 | Field | Example | Changeable |
 | --- | --- | --- |
-| `_PROJECT_ID` | `sre-oncall-skills` | **No**, once traces exist |
-| `_PROJECT_NAME` | `SRE Oncall Skills` | Yes — display label only |
+| `_PROJECT_ID` | `my-app` | **No**, once traces exist |
+| `_PROJECT_NAME` | `My App` | Yes — display label only |
 
 Use the repo's slug for the ID and a human label for the name. The ID is
 referenced by `project_id` on every trace row and by foreign keys across ~49
