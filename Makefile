@@ -27,6 +27,7 @@ SERVICE ?=
 # Pinned to a release so every clone deploys the same compose file; bump it
 # deliberately, or follow upstream with LANGFUSE_VERSION=main make dev/up.
 LANGFUSE_REPO_URL ?= https://github.com/langfuse/langfuse.git
+# renovate: datasource=github-releases depName=langfuse/langfuse
 LANGFUSE_VERSION ?= v4.48.0
 LANGFUSE_SRC_PATH ?= $(PROJECT_PATH)/.langfuse
 
@@ -640,6 +641,7 @@ BACKUP_STAMP := $(shell date -u +%Y%m%dT%H%M%SZ)
 BACKUP_DEST ?= $(BACKUP_PATH)/$(BACKUP_STAMP)
 
 # Provides tar/gzip for volume archiving; the minio image is distroless.
+# renovate: datasource=docker depName=docker.io/alpine
 BACKUP_HELPER_IMAGE ?= docker.io/alpine:3
 
 # Secrets that must travel with the data. ENCRYPTION_KEY decrypts stored LLM
