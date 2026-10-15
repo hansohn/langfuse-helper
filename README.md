@@ -47,7 +47,7 @@ brew install uv        # or: curl -LsSf https://astral.sh/uv/install.sh | sh
 ## Quick start
 
 ```bash
-git clone <this repo> && cd langfuse-helper
+git clone https://github.com/hansohn/langfuse-helper.git && cd langfuse-helper
 make dev/up                # or TRACE=true make dev/up to also set up tracing
 ```
 
