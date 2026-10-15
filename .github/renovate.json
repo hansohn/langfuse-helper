@@ -1,0 +1,47 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":dependencyDashboard"
+  ],
+  "labels": ["dependencies"],
+  "customManagers": [
+    {
+      "description": "Pins annotated with a '# renovate:' comment on the line above",
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)Makefile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\n\\S+ \\?= (?:\\S+:)?(?<currentValue>\\S+)"
+      ]
+    },
+    {
+      "description": "Keep the README's documented LANGFUSE_VERSION default in step with the Makefile",
+      "customType": "regex",
+      "managerFilePatterns": ["/^README\\.md$/"],
+      "matchStrings": ["\\| `LANGFUSE_VERSION` \\| `(?<currentValue>v[^`]+)` \\|"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "langfuse/langfuse"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "One PR for all GitHub Actions bumps",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions",
+      "semanticCommitType": "ci"
+    },
+    {
+      "description": "Bump the Makefile and README together",
+      "matchDepNames": ["langfuse/langfuse"],
+      "groupName": "langfuse",
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "make"
+    },
+    {
+      "matchDepNames": ["docker.io/alpine"],
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "make"
+    }
+  ]
+}
