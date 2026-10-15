@@ -5,12 +5,18 @@ on:
   workflow_dispatch:
   # Branch pushes are covered by pull_request; also running on every branch push
   # would test each PR commit twice.
+  # Markdown-only changes cannot affect the stack, so they skip the ~4 min smoke
+  # run. Path filters are not evaluated for tag pushes, so releases always run.
   push:
     branches:
       - main
     tags:
       - 'v?[0-9]+.[0-9]+.[0-9]+'
+    paths-ignore:
+      - '**.md'
   pull_request:
+    paths-ignore:
+      - '**.md'
 
 permissions:
   contents: read
